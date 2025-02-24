@@ -46,7 +46,7 @@ SETUP:
 	
 ; Bucle principal
 LOOP:
-	IN R16, TIFR0			; Leemos el registro TIFR0
+    IN R16, TIFR0			; Leemos el registro TIFR0
     SBRS R16, TOV0		; Verificamos si la bandera de overflow está activa
     RJMP LOOP			; Salta si sí
 

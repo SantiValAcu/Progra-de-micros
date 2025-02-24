@@ -1,0 +1,187 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: postlaboratorio #1
+;Hardware: ATMega328P 
+;Creado: 10/02/2025 
+;Modificado: 10/02/2025 
+;Descipción: Este programa consiste en dos contadores y un sumador 
+;****************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000           
+
+// Configuración de la pila
+LDI R16, LOW(RAMEND)
+OUT SPL, R16 // Cargar 0xff a SPL
+LDI R16, HIGH(RAMEND)
+OUT SPH, R16 // Cargar 0x08 a SPH
+
+; Configuración de puertos
+SETUP:
+	; Configurar Prescaler "Principal"
+	LDI R16, (1 << CLKPCE)
+	STS CLKPR, R16		; Habilitar cambio de PRESCALER
+	LDI R16, 0b00000100
+	STS CLKPR, R16		; Configurar Prescaler a 16 F_cpu = 1MHz
+
+	// Inicializar timer0
+	CALL INIT_TMR0
+
+    ; Puerto B como entrada con pull-ups habilitados
+    LDI R22, 0x00
+    OUT DDRB, R22
+    LDI R22, 0xFF
+    OUT PORTB, R22
+
+    ; Puerto D como salida para los LEDs
+    LDI R17, 0xFF
+    OUT DDRD, R17
+    LDI R17, 0x00  ; LEDs apagados
+    OUT PORTD, R17
+
+	; Puerto C como salida para los LEDs
+    LDI R18, 0xFF
+    OUT DDRC, R18
+    LDI R18, 0x00  ; LEDs apagados
+    OUT PORTC, R18
+
+    ; Inicialización de los contadores
+    LDI R17, 0x00 ; Contador 1 (bits inferiores)
+    LDI R18, 0x00 ; Contador 2 (bits superiores)
+	
+	; Valor para antirrebote
+	LDI R21, 0xFF	; Valor para verificar si está presionado un boton
+	 
+; Bucle principal
+LOOP:
+    ; Lee el estado de los pulsadores
+    IN R22, PINB
+	; Antirrebote
+	CP R21, R22		; Ver si no hubo un cambio
+	BREQ LOOP
+	CALL DELAY
+	IN R22, PINB	; Verificar nuevamente
+	CP R21, R22
+	BREQ LOOP
+	MOV R21, R22	; Guardar el cambio
+    ; Manejo del contador 1
+    SBRS R22, 0 ; Salta si PB0 está a 1 (no presionado)
+    RJMP incremento1
+    SBRS R22, 1 ; Salta si PB1 está a 1 (no presionado)
+    RJMP decremento1
+
+    ; Manejo del contador 2
+    SBRS R22, 2 ; Salta si PB2 está a 1 (no presionado)
+    RJMP incremento2
+    SBRS R22, 3 ; Salta si PB3 está a 1 (no presionado)
+    RJMP decremento2
+
+	; Manejo del sumador
+	SBRS R22, 4	; SalRa si PB4 está a 1 (no presionado)
+	RJMP sumador
+
+    RJMP LOOP
+
+; Rutina de incremento1
+incremento1:
+    INC R17					; Incrementa el contador 1
+    CPI R17, 0x10			; ¿Contador llegó a 16?
+    BREQ contador_cero1		; Si sí, reinicio a 0
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+	RJMP LOOP
+
+; Rutina de decremento1
+decremento1:
+    DEC R17					; Decrementar el contador 1
+    CPI R17, 0xFF			; ¿Contador llegó a -1(255)?
+    BREQ contador_quince1	; Si sí, reinicio a 15
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+    RJMP LOOP
+
+; Reinicio a 0 contador 1
+contador_cero1:
+    LDI R17, 0x00
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+    RJMP LOOP
+
+; Reinicio a 15 contador 1
+contador_quince1:
+    LDI R17, 0x0F
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+    RJMP LOOP
+
+; Rutina de incremento2
+incremento2:
+    INC R18					; Incrementa el contador 2
+    CPI R18, 0x10			; ¿Contador llegó a 16?
+    BREQ contador_cero2		; Si sí, reinicio a 0
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs 
+	RJMP LOOP
+
+; Rutina de decremento2
+decremento2:
+    DEC R18					; Decrementar el contador 1
+    CPI R18, 0xFF			; ¿Contador llegó a -1(255)?
+    BREQ contador_quince2	; Si sí, reinicio a 15
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+    RJMP LOOP
+
+; Reinicio a 0 contador 2
+contador_cero2:
+    LDI R18, 0x00
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+    RJMP LOOP
+
+; Reinicio a 15 contador 2
+contador_quince2:
+    LDI R18, 0x0F
+    CALL actualizar_leds	; Combina los contadores y actualiza los LEDs
+    RJMP LOOP
+
+; Rutina de combinacion de contadores
+actualizar_leds:
+	CALL DELAY
+	MOV R19, R18
+	MOV R20, R17
+    LSL R19
+	LSL R19
+	LSL R19
+	LSL R19			; Mover 4 bits a la izquierda el valor del contador 2
+    OR R20, R19		; Combina el contador 1 y el contador 2
+    OUT PORTD, R20	; Actualizar los leds
+    RET
+
+; Rutina de sumador
+sumador:
+	MOV R19, R17	; Mover valor de contador 1
+	ADD R19, R18	; Realizar suma de los contadores
+	OUT PORTC, R19	; Dar respuesta de la suma
+	RJMP LOOP
+
+; Rutina de delay
+DELAY:
+	LDI R19, 0		; Valor inicial para r20
+	rebote1:
+		LDI R20, 0	; Valor inicial para r21
+	rebote2:
+		NOP
+		INC R20		; Incrementar valor de r21
+		CPI R20, 0	; Saltar si el valor de r21 es cero
+		BRNE rebote2
+		INC R19		; Incrementar valor de r20
+		CPI R19, 0	; Saltar si el valor de r20 es cero
+		BRNE rebote1
+	RET
+
+; NON-Interrupt subroutines
+INIT_TMR0:
+	LDI R16, (1<<CS01) | (1<<CS00)
+	OUT TCCR0B, R16 // Setear prescaler del TIMER 0 a 64
+	LDI R16, 100
+	OUT TCNT0, R16 // Cargar valor inicial en TCNT0
+	RET

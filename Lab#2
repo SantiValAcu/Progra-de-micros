@@ -1,0 +1,207 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: prelab #2
+;Hardware: ATMega328P 
+;Creado: 11/02/2025 
+;Modificado: 11/02/2025 
+;Descipción: Contador binario de 4 bits en el que cada incremento se realizará cada 100ms, utilizando el Timer0
+;****************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000           
+
+// Configuración de la pila
+LDI R16, LOW(RAMEND)
+OUT SPL, R16 // Cargar 0xff a SPL
+LDI R16, HIGH(RAMEND)
+OUT SPH, R16 // Cargar 0x08 a SPH
+
+; Configuración de puertos
+SETUP:
+	; Puerto B como entrada con pull-ups habilitados
+    LDI R16, 0x00
+    OUT DDRB, R16
+    LDI R16, 0xFF
+    OUT PORTB, R16
+
+	; Puerto D como salida para los LEDs
+    LDI R16, 0xFF
+    OUT DDRD, R16
+    LDI R16, 0x7B  ; LEDs formando el 0
+    OUT PORTD, R16
+
+    ; Inicializar contador
+	LDI R17, 0x00
+
+	; Valor de antirrebote
+	LDI R18, 0xFF	; Valor para verificar si está presionado un boton
+
+	LDI R20, 0x7B	; Valor de 0 en el display
+
+; Bucle principal
+LOOP:
+	IN R16, PINB
+		; Antirrebote
+		CP R18, R16		; Ver si no hubo un cambio
+		BREQ LOOP
+		CALL DELAY
+		IN R16, PINB	; Verificar nuevamente
+		CP R18, R16
+		BREQ LOOP
+		MOV R18, R16	; Guardar el cambio
+	; Manejo del contador 1
+    SBRS R16, 0 ; Salta si PB0 está a 1 (no presionado)
+    RJMP incremento	; Ir a la subrutina de incrementar
+    SBRS R16, 1 ; Salta si PB1 está a 1 (no presionado)
+    RJMP decremento	; Ir a la subrutina de decremento
+	RJMP LOOP
+
+; Rutina de incremento
+incremento:
+    INC R17					; Incrementa el contador 1
+    CPI R17, 0x10			; ¿Contador llegó a 16?
+    BREQ contador_cero		; Si sí, reinicio a 0
+    CALL actualizar_leds	; Actualizar LEDs 
+	RJMP LOOP
+
+; Rutina de decremento
+decremento:
+    DEC R17					; Decrementar el contador 1
+    CPI R17, 0xFF			; ¿Contador llegó a -1(255)?
+    BREQ contador_quince	; Si sí, reinicio a 15
+    CALL actualizar_leds	; Actualizar LEDs
+	RJMP LOOP
+
+; Reinicio a 0 contador
+contador_cero:
+    LDI R17, 0x00			; Regresar el contador a 0
+	CALL actualizar_leds	; Actualizar LEDs
+    RJMP LOOP
+
+; Reinicio a 15 contador
+contador_quince:
+    LDI R17, 0x0F			; Regresar el contador a 15
+	CALL actualizar_leds	; Actualizar LEDs
+    RJMP LOOP
+
+; Actualización del display según el valor de R17
+actualizar_leds:
+	CPI R17, 0x00		; Verificar si el contador esta en 0
+	BREQ led0
+	CPI R17, 0x01		; Verificar si el contador esta en 1
+	BREQ led1
+	CPI R17, 0x02		; Verificar si el contador esta en 2
+	BREQ led2
+	CPI R17, 0x03		; Verificar si el contador esta en 3
+	BREQ led3
+	CPI R17, 0x04		; Verificar si el contador esta en 4
+	BREQ led4
+	CPI R17, 0x05		; Verificar si el contador esta en 5
+	BREQ led5
+	CPI R17, 0x06		; Verificar si el contador esta en 6
+	BREQ led6
+	CPI R17, 0x07		; Verificar si el contador esta en 7
+	BREQ led7
+	CPI R17, 0x08		; Verificar si el contador esta en 8
+	BREQ led8
+	CPI R17, 0x09		; Verificar si el contador esta en 9
+	BREQ led9
+	CPI R17, 0x0A		; Verificar si el contador esta en 10
+	BREQ led10
+	CPI R17, 0x0B		; Verificar si el contador esta en 11
+	BREQ led11
+	CPI R17, 0x0C		; Verificar si el contador esta en 12
+	BREQ led12
+	CPI R17, 0x0D		; Verificar si el contador esta en 13
+	BREQ led13
+	CPI R17, 0x0E		; Verificar si el contador esta en 14
+	BREQ led14
+	CPI R17, 0x0F		; Verificar si el contador esta en 15
+	BREQ led15
+	RET		
+
+led0:
+	LDI R20, 0x7B		; Ponerle el valor de 0 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+
+led1:
+	LDI R20, 0x0A		; Ponerle el valor de 1 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led2:
+	LDI R20, 0xB3		; Ponerle el valor de 2 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led3:
+	LDI R20, 0x9B		; Ponerle el valor de 3 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led4:
+	LDI R20, 0xCA		; Ponerle el valor de 4 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led5:
+	LDI R20, 0xD9		; Ponerle el valor de 5 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led6:
+	LDI R20, 0xF9		; Ponerle el valor de 6 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led7:
+	LDI R20, 0x0B		; Ponerle el valor de 7 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led8:
+	LDI R20, 0xFB		; Ponerle el valor de 8 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led9:
+	LDI R20, 0xDB		; Ponerle el valor de 9 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led10:
+	LDI R20, 0xEB		; Ponerle el valor de 10 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led11:
+	LDI R20, 0xF8		; Ponerle el valor de 11 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led12:
+	LDI R20, 0x71		; Ponerle el valor de 12 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led13:
+	LDI R20, 0xBA		; Ponerle el valor de 13 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led14:
+	LDI R20, 0xF1		; Ponerle el valor de 14 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+led15:
+	LDI R20, 0xE1		; Ponerle el valor de 15 a r20
+	OUT PORTD, R20		; Mostrarlo en el display
+	RJMP LOOP
+
+; Rutina de delay
+DELAY:
+	LDI R19, 0		; Valor inicial para r19
+	rebote1:
+		LDI R20, 0	; Valor inicial para r20
+	rebote2:
+		NOP
+		INC R20		; Incrementar valor de r20
+		CPI R20, 0	; Saltar si el valor de r20 es cero
+		BRNE rebote2
+		INC R19		; Incrementar valor de r19
+		CPI R19, 0	; Saltar si el valor de r19 es cero
+		BRNE rebote1
+	RET

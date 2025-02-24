@@ -1,0 +1,141 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: Prelaboratorio #1
+;Hardware: ATMega328P 
+;Creado: 5/02/2025 
+;Modificado: 10/02/2025 
+;Descipción: Este programa consiste en un contador binario de 4 bits con dos pushbottons uno aumenta y otro decrementa  
+;****************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000
+
+// Configuración de la pila
+LDI R16, LOW(RAMEND)
+OUT SPL, R16 // Cargar 0xff a SPL
+LDI R16, HIGH(RAMEND)
+OUT SPH, R16 // Cargar 0x08 a SPH
+
+; Configuración de puertos
+SETUP:
+    ; Puerto D como entrada con pull-ups habilitados
+    LDI R16, 0x00
+    OUT DDRD, R16
+    LDI R16, 0xFF
+    OUT PORTD, R16
+
+    ; Puerto B como salida con LEDs inicialmente apagados
+    LDI R17, 0xFF
+    OUT DDRB, R17
+    LDI R17, 0x00  ; LEDs apagados
+    OUT PORTB, R17
+
+	; Puerto C como salida con LEDs inicialmente apagados
+    LDI R19, 0xFF
+    OUT DDRC, R19
+    LDI R19, 0x00  ; LEDs apagados
+    OUT PORTC, R19
+
+; Bucle principal
+LOOP:
+    ; Lee el estado de los pulsadores
+    IN R16, PIND
+	; Primer contador
+    ; Verifica el pulsador1 de incremento (PD2)
+    SBRS R16, 2  ; Salta si PD2 está a 1 (no presionado)
+	CALL DELAY      ; Antirrebote
+    RJMP incremento1
+    ; Verifica el pulsador2 de decremento (PD3)
+    SBRS R16, 3  ; Salta si PD3 está a 1 (no presionado)
+	CALL DELAY      ; Antirrebote
+    RJMP decremento1
+
+	; Segundo contador
+	; Verifica el pulsador3 de incremento (PD4)
+    SBRS R16, 4  ; Salta si PD4 está a 1 (no presionado)
+	CALL DELAY      ; Antirrebote
+    RJMP incremento2
+    ; Verifica el pulsador4 de decremento (PD5)
+    SBRS R16, 5  ; Salta si PD5 está a 1 (no presionado)
+	CALL DELAY      ; Antirrebote
+    RJMP decremento2
+    RJMP LOOP  ; Si ningún pulsador está presionado, vuelve al inicio
+
+; Rutina de incremento1
+incremento1:
+    CALL DELAY      ; Antirrebote
+    INC R17        ; Incrementa el contador
+    OUT PORTB, R17  ; Actualiza los LEDs
+    CPI R17, 0x10  ; ¿Contador llegó a 16?
+    BREQ contador_cero1  ; Si sí, reinicia a 0
+    RJMP LOOP      ; Vuelve al bucle
+
+; Rutina de decremento1
+decremento1:
+    CALL DELAY      ; Antirrebote
+    DEC R17        ; Decrementa el contador
+    OUT PORTB, R17  ; Actualiza los LEDs
+    CPI R17, 0xFF  ; ¿Contador llegó a -1?
+    BREQ contador_quince1  ; Si sí, reinicia a 15
+    RJMP LOOP      ; Vuelve al bucle
+
+; Reinicio a 0
+contador_cero1:
+    LDI R17, 0x00
+    OUT PORTB, R17  ; Apaga todos los LEDs
+    RJMP LOOP
+
+; Reinicio a 15
+contador_quince1:
+    LDI R17, 0x0F
+    OUT PORTB, R17  ; Enciende los LEDs del 0 al 3
+    RJMP LOOP
+
+; Rutina de incremento2
+incremento2:
+    CALL DELAY      ; Antirrebote
+    INC R19        ; Incrementa el contador
+    OUT PORTC, R19  ; Actualiza los LEDs
+    CPI R19, 0x10  ; ¿Contador llegó a 16?
+    BREQ contador_cero2  ; Si sí, reinicia a 0
+    RJMP LOOP      ; Vuelve al bucle
+
+; Rutina de decremento2
+decremento2:
+    CALL DELAY      ; Antirrebote
+    DEC R19        ; Decrementa el contador
+    OUT PORTC, R19  ; Actualiza los LEDs
+    CPI R19, 0xFF  ; ¿Contador llegó a -1?
+    BREQ contador_quince2  ; Si sí, reinicia a 15
+    RJMP LOOP      ; Vuelve al bucle
+
+; Reinicio a 0
+contador_cero2:
+    LDI R19, 0x00
+    OUT PORTC, R19  ; Apaga todos los LEDs
+    RJMP LOOP
+
+; Reinicio a 15
+contador_quince2:
+    LDI R19, 0x0F
+    OUT PORTC, R19	; Enciende los LEDs del 0 al 3
+    RJMP LOOP
+
+; Rutina de antirrebote (usando bucles)
+DELAY:
+	LDI R18, 0		; Valor inicial para r18
+	rebote1:
+		LDI R20, 0	; Valor inicial para r20
+	rebote2:
+		INC R20		; Incrementar valor de r20
+		CPI R20, 0	; Saltar si el valor de r20 es cero
+		BRNE rebote2
+		INC R18		; Incrementar valor de r18
+		CPI R18, 0	; Saltar si el valor de r18 es cero
+		BRNE rebote1
+	RET

@@ -1,0 +1,96 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: prelab #3
+;Hardware: ATMega328P 
+;Creado: 19/02/2025 
+;Modificado: 19/02/2025 
+;Descipción: Contador binario de 4 bits, utilizando dos pushbuttons, y utilizando interrupciones on-change
+;****************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000 
+	JMP INICIO
+.org PCI0addr		; Dirección de la interrupción PCINT0 (on-change)
+	RJMP rut_int
+ 
+; Configuración de la pila
+INICIO:
+	LDI R16, LOW(RAMEND)
+	OUT SPL, R16		; Cargar 0xff a SPL
+	LDI R16, HIGH(RAMEND)
+	OUT SPH, R16		; Cargar 0x08 a SPH
+
+SETUP:
+	CLI		; Deshabilitar interrupciones globales
+	; Configurar Prescaler "Principal"
+	LDI R16, (1 << CLKPCE)
+	STS CLKPR, R16		; Habilitar cambio de PRESCALER
+	LDI R16, 0x07		; Cambio de frecuencia a 125kHz (CLKPS = 7)
+	STS CLKPR, R16
+
+	; Inicializamos el timer0
+	LDI R16, (1 << CS02	| 1 << CS00 ) 
+	OUT TCCR0B, R16		; Prescaler a 1024
+	LDI R16, 0xF4
+	OUT TCNT0, R16		; Cargar el valor inicial correcto (244 en decimal)
+	; Configuración de puertos
+	; Puerto B como entrada 
+	LDI R16, 0X00
+	OUT DDRB, R16 
+	LDI R16, 0XFF
+	OUT PORTB, R16 
+	; Puerto C como salida para los LEDs del contador binario
+    LDI R16, 0xFF
+    OUT DDRC, R16
+    LDI R16, 0x00  ; LEDs apagados
+    OUT PORTC, R16
+	; Configuración de interrupción
+	LDI R16, (1 << PCIE0)	; Habilitar el registro de control del PORTB
+	STS PCICR, R16
+	LDI R16, (1 << PCINT0) | (1 << PCINT1) ; Habilitar PB0 y PB1
+	STS PCMSK0, R16			; Habilitar registro de mascara en PORTB
+	;Configuramos valores iniciales
+	LDI R17, 0x00
+	SEI ; Habilitar interrupciones globales
+
+; Bucle principal
+LOOP:
+	RJMP LOOP ;Se realizaran cambios cuando se detecte una interrupción, si no queda en bucle
+
+; Rutina de interrupción
+rut_int:
+	PUSH R16			; Guardamos contenido de R16
+	IN R16, SREG	
+	PUSH R16			; Guardamos contenido de SREG
+	;-------------------------------------------------
+retardo:
+	IN R16, TIFR0		; Leemos el registro TIFR0
+    SBRS R16, TOV0		; Verificamos si la bandera de overflow está activa
+   	RJMP retardo		; Salta si sí, si no regresa a retardo
+   	SBI TIFR0, TOV0		; Limpiar la bandera de overflow
+   	LDI R16, 0xF4		; Implementamos valor inicial del contador
+   	OUT TCNT0, R16		; Recargar el Timer0	
+	IN R16, PINB        ; Leemos el estado del puerto B
+	SBRS R16, 0			; Salta si PB0 está en 1 (no presionado)
+    INC R17				; Incrementa R17
+    CPI R17, 0x10
+    BRNE continuar		; Si es igual salta
+    LDI R17, 0x00		; Reiniciar si llega a 16
+continuar:
+    SBRS R16, 1			; Salta si PB1 está a 1 (no presionado)
+    DEC R17				; Decrementa R17
+    CPI R17, 0xFF
+    BRNE terminar		; Si es igual salta
+    LDI R17, 0x0F		; Reiniciar si llega a -1 (255)
+terminar:
+    OUT PORTC, R17  
+	;------------------------------------------------
+	POP R16				
+	OUT SREG, R16		; Regresar el valor de SREG
+	POP R16				; Regresar el valor de R16
+	RETI

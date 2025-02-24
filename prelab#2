@@ -1,0 +1,66 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: prelab #2
+;Hardware: ATMega328P 
+;Creado: 11/02/2025 
+;Modificado: 11/02/2025 
+;Descipción: Contador binario de 4 bits en el que cada incremento se realizará cada 100ms, utilizando el Timer0
+;****************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000           
+
+// Configuración de la pila
+LDI R16, LOW(RAMEND)
+OUT SPL, R16 // Cargar 0xff a SPL
+LDI R16, HIGH(RAMEND)
+OUT SPH, R16 // Cargar 0x08 a SPH
+
+; Configuración de puertos
+SETUP:
+	; Configurar Prescaler "Principal"
+	LDI R16, (1 << CLKPCE)
+	STS CLKPR, R16		; Habilitar cambio de PRESCALER
+	LDI R16, 0x07		; Cambio de frecuencia a 125kHz (CLKPS = 7)
+	STS CLKPR, R16
+
+	; Inicializamos el timer0
+	LDI R16, (1 << CS02	| 1 << CS00 ) 
+	OUT TCCR0B, R16		; Prescaler a 1024
+	LDI R16, 0xF4
+	OUT TCNT0, R16		; Cargar el valor inicial correcto (244 en decimal)
+
+	; Puerto C como salida para los LEDs
+    LDI R16, 0xFF
+    OUT DDRC, R16
+    LDI R16, 0x00  ; LEDs apagados
+    OUT PORTC, R16
+
+    ; Inicializar contador
+    LDI R17, 0x00 
+	
+; Bucle principal
+LOOP:
+	IN R16, TIFR0			; Leemos el registro TIFR0
+    SBRS R16, TOV0		; Verificamos si la bandera de overflow está activa
+    RJMP LOOP			; Salta si sí
+
+    SBI TIFR0, TOV0		; Limpiar la bandera de overflow
+    LDI R16, 0xF4		; Implementamos valor inicial del contador
+    OUT TCNT0, R16		; Recargar el Timer0
+
+    INC R17				; Incrementar contador
+    CPI R17, 0x10		; Verificar si se pasó de 15
+    BREQ contador_cero	; Si se pasa de 15, lo reinicia a 0
+	OUT PORTC, R17		; Mostrar valor en los LEDs
+    RJMP LOOP
+
+contador_cero:
+    LDI R17, 0x00	; Reinicio a 0
+    OUT PORTC, R17  ; Enviar el valor a los LEDs
+    RJMP LOOP

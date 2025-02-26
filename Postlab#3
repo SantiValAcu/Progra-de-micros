@@ -1,0 +1,132 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: Postlab #3
+;Hardware: ATMega328P 
+;Creado: 23/02/2025 
+;Modificado: 23/02/2025 
+;Descipción: Contador de decenas con dos displays utilizando TMR0
+;****************************************************************
+
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000 
+	JMP INICIO
+.org 0x0020			; Dirección de la interrupción timer0 overflow
+	JMP TMR0_ISR
+
+; Tabla de datos con la configuración de los números en display
+TABLA: 
+	.DB 0x7B, 0x0A, 0xB3, 0x9B, 0xCA, 0xD9, 0xF9, 0x0B, 0xFB, 0xDB 
+
+; Configuración de la pila
+INICIO:
+	LDI R16, LOW(RAMEND)
+	OUT SPL, R16		; Cargar 0xff a SPL
+	LDI R16, HIGH(RAMEND)
+	OUT SPH, R16		; Cargar 0x08 a SPH
+
+SETUP:
+	CLI		; Deshabilitar interrupciones globales
+	; Configurar Prescaler "Principal"
+	LDI R16, (1 << CLKPCE)
+	STS CLKPR, R16		; Habilitar cambio de PRESCALER
+	LDI R16, 0x03		; Cambio de frecuencia a 1MHz
+	STS CLKPR, R16
+
+	; Inicializamos el timer0
+	LDI R16, (1 << CS01	| 1 << CS00 ) 
+	OUT TCCR0B, R16		; Prescaler a 64
+	LDI R16, 100
+	OUT TCNT0, R16		; 10ms
+
+	; Configuración de puertos
+	; Puerto D como salida para los LEDs del display
+    LDI R16, 0xFF
+    OUT DDRD, R16
+    LDI R16, 0x00  ; LEDs apagados
+    OUT PORTD, R16
+	; Puerto B como salida (solo PB2 y PB3)
+	SBI DDRB, PB2
+	SBI DDRB, PB3
+	CBI PORTB, PB2
+	CBI PORTB, PB3
+
+	; Configuración de interrupciones
+	; Interrupcion de timer
+	LDI R16, (1 << TOIE0)	; Habilitar timer overflow
+	STS TIMSK0, R16
+	LDI R16, (1 << TOV0)	; Habilitar mascara overflow
+	STS TIFR0, R16
+
+	; Configuración de valores del display
+	; Cargar la dirección base de la tabla de valores del display en el puntero Z
+	LDI ZH, HIGH(TABLA << 1)	; Cargar la parte alta de la dirección de la tabla
+	LDI ZL, LOW(TABLA << 1)		; Cargar la parte baja de la dirección de la tabla  
+
+	; Configuración de valores iniciales
+	LDI R17, 0		; Contador para el seg del TMR0
+	LDI R18, 0		; Contador intermedio de unidades
+	LDI R19, 0		; Contador intermedio de decenas
+
+	SEI ; Habilitar interrupciones globales
+
+; Bucle principal
+LOOP:	
+	; Encender PB3 para mostrar valor de unidades
+    SBI PORTB, PB3					; Encender PB3
+    LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, R18						; Sumar el valor de las unidades (R18) a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar el valor en el display
+	CALL DELAY
+    ; Apagar PB3 y encender PB2, para mostrar valor de decenas
+	CBI PORTB, PB3					; Apagar PB3
+    SBI PORTB, PB2					; Encender PB2
+    LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+    ADD ZL, R19						; Sumar el valor de las unidades (R19) a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar el valor en el display
+	CALL DELAY
+	CBI PORTB, PB2					; Apagar PB2
+	RJMP LOOP						; Repetir el bucle
+
+; Rutina de interrupción del TMR0
+TMR0_ISR:
+	LDI R16, 100		; Valor del TCNT0
+	OUT TCNT0, R16
+	INC R17				; Incrementar R17
+	CPI R17, 200		; Debe de pasar 200 (con 100 va muy rapido) veces el overflow para que sea 1s
+	BRNE salir			; Si no es igual salta a salir
+	CLR R17				; Limpiar el contador
+	INC R18				; Incrementar el contador intermedio de unidades
+	CPI R18, 10			; Comparar R18 con 10 (mayor al valor max (9))
+	BREQ overflow1		; Si el contador se pasa de 9 hacer el salto
+
+salir:
+	RETI
+; Rutina si las unidades se pasan de 9, regresarlas a 0 e incrementar decenas	
+overflow1:
+	LDI R18, 0			; Resetear el contador de unidades a 0
+	INC R19				; Incrementar el contador intermedio de decenas
+	CPI R19, 6			; Comparar R19 con 6 
+	BREQ overflow2		; Si el contador se para de 5 hacer el salto
+	RJMP salir			
+; Rutina se las decenas se pasan de 6, hacer un reset
+overflow2:
+	LDI R19, 0			; Resetear el contador de decenas a 0
+	RJMP salir
+
+; Rutina de delay
+DELAY:
+	LDI R20, 0		; Valor inicial para r20
+	rebote1:
+		INC R20		; Incrementar valor de r20
+		CPI R20, 0	; Saltar si el valor de r20 es cero
+		BRNE rebote1
+	RET

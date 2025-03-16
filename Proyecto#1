@@ -7,8 +7,8 @@
 ;Proyecto: Proyecto #1
 ;Hardware: ATMega328P 
 ;Creado: 02/03/2025 
-;Modificado: ---- 
-;Descipción: ----
+;Modificado: 16/03/2025 
+;Descipción: Reloj con 4 displays con modos de mostrar hora, fecha, configuración hora, configuración fecha, configuración alarma y apagar/encender alarma.
 ;****************************************************************
 
 .include "M328PDEF.inc"
@@ -151,19 +151,6 @@ SETUP:
 ;**********************************************************************************************************************
 ; Bucle principal
 LOOP:
-	IN R16, PORTB			; Cargar valores del puerto B a R16
-	SBRS R16, 0				; Saltar si el bit 0 está en 0 (LED de alarma apagado)
-	RJMP seguir				; Saltar a seguir
-	CP unimin, uniminA		; Comparar unidad de min con alarma
-	BRNE seguir				; Saltar si no es igual
-	CP decemin, deceminA	; Comparar decena de min con alarma
-	BRNE seguir				; Saltar si no es igual
-	CP unihora, unihoraA	; Comparar unidad de hora con alarma
-	BRNE seguir				; Saltar si no es igual
-	CP decehora, decehoraA	; Comparar decena de hora con alarma
-	BRNE seguir				; Saltar si no es igual
-	SBI PORTB, PB4			; Prender buzzer
-seguir:
 	CPI MODE, 0			; Comparar si se encuentra en el modo 0
 	BREQ HORA			; Si sí ir a la rutina de hora
 	CPI MODE, 1			; Comparar si se encuentra en el modo 1
@@ -196,6 +183,20 @@ MOD3:
 ;----------------------------------------------------------------------------------------------------------------------
 ; Configuración de rutina de modo de hora
 HORA:
+	; Ver alarma
+	IN R16, PORTB			; Cargar valores del puerto B a R16
+	SBRS R16, 0				; Saltar si PB0 está en 0 (LED de alarma apagado)
+	RJMP seguir				; Saltar a seguir
+	CP unimin, uniminA		; Comparar unidad de min con alarma
+	BRNE seguir				; Saltar si no es igual
+	CP decemin, deceminA	; Comparar decena de min con alarma
+	BRNE seguir				; Saltar si no es igual
+	CP unihora, unihoraA	; Comparar unidad de hora con alarma
+	BRNE seguir				; Saltar si no es igual
+	CP decehora, decehoraA	; Comparar decena de hora con alarma
+	BRNE seguir				; Saltar si no es igual
+	SBI PORTB, PB4			; Prender buzzer
+seguir:
 	CBI PORTB, PB2					; Apagar led de fecha
 	SBI PORTB, PB3					; Encender led de hora
 	; Encender valor de minutos
@@ -243,6 +244,20 @@ HORA:
 	RJMP LOOP						; Regresar al LOOP principal
 ; Configuración de rutina de modo de fecha
 FECHA:
+; Ver alarma
+	IN R16, PORTB			; Cargar valores del puerto B a R16
+	SBRS R16, 0				; Saltar si el PB0 está en 0 (LED de alarma apagado)
+	RJMP seguir1			; Saltar a seguir
+	CP unimin, uniminA		; Comparar unidad de min con alarma
+	BRNE seguir1			; Saltar si no es igual
+	CP decemin, deceminA	; Comparar decena de min con alarma
+	BRNE seguir1			; Saltar si no es igual
+	CP unihora, unihoraA	; Comparar unidad de hora con alarma
+	BRNE seguir1			; Saltar si no es igual
+	CP decehora, decehoraA	; Comparar decena de hora con alarma
+	BRNE seguir1			; Saltar si no es igual
+	SBI PORTB, PB4			; Prender buzzer
+seguir1:
 	CBI PORTB, PB3					; Apagar led de hora
 	SBI PORTB, PB2					; Encender led de fecha
 	; Encender valor de mes
@@ -490,9 +505,18 @@ SPUSH7:
 ;-----------------------------------------------------
 apag_alarma:
 	IN R16, PINC		; Leer PINC en R16
-	SBRS R16, 0			; Saltar si esta en 1 PC0 (prendido)
-	CBI PORTB, PB4		; Apagar buzzer
-	SBRS R16, 1			; Saltar si esta en 1 PC1 (prendido)
+	SBRS R16, 0			; Saltar si esta en 1 PC0 (no presionado)
+	RJMP apagado
+	SBRS R16, 1			; Saltar si esta en 1 PC1 (no presionado)
+	RJMP apagado
+	RJMP salida			; Saltar a salida
+apagado:
+	IN R16, PORTB		; Leer PortB en R16
+	SBRS R16, 0			; Saltar si PB0 está en 0 (LED de alarma apagado)
+	RJMP salida			; Saltar a salida
+	SBRS R16, 4			; Saltar si PB4 está en 0 (buzzer apagado)
+	RJMP salida			; Saltar a salida
+	CBI PORTB, PB0		; Apagar led de alarma
 	CBI PORTB, PB4		; Apagar buzzer
 	RJMP salida			; Saltar a salida
 PUSH1:
@@ -942,7 +966,7 @@ TMR0_ISR:
 	BREQ SRELOJ5		; Si es ifual saltar a SRELOJ5
 	CPI MODE, 7			; Si no, comparar modo con 7
 	BREQ SRELOJ6		; Si es ifual saltar a SRELOJ6
-	RJMP salir
+	RJMP salir			; Saltar a salida
 ; Saltos largos
 SRELOJP:
 	RJMP RELOJP			; Saltar a RELOJP
@@ -951,7 +975,7 @@ SRELOJ5:
 SRELOJ6:
 	RJMP RELOJ6			; Saltar a RELOJ5
 Ssalir:
-	RJMP salir
+	RJMP salir			; Saltar a salida
 ;-----------------------------------------------------
 RELOJ1:
 	LDI R16, 158        ; Cargar valor del TCNT0
@@ -966,7 +990,7 @@ RELOJ1:
 	CP R16, led			; Compararlo con el registro de led
 	BREQ apag1			; Si es igual saltar a apagar led
 	SBI PORTB, PB3		; Si no encender led
-	RJMP salir
+	RJMP salir			; Saltar a salida
 	; Titileo de LED
 apag1:
 	CLR led				; Borrar/resetear registro de led
@@ -986,7 +1010,7 @@ RELOJ2:
 	CP R16, led			; Compararlo con el registro de led
 	BREQ apag2			; Si es igual saltar a apagar led
 	SBI PORTB, PB3		; Si no encender led
-	RJMP salir
+	RJMP salir			; Saltar a salida
 	; Titileo de LED
 apag2:
 	CLR led				; Borrar/resetear registro de led
@@ -1006,7 +1030,7 @@ RELOJ3:
 	CP R16, led			; Compararlo con el registro de led
 	BREQ apag3			; Si es igual saltar a apagar led
 	SBI PORTB, PB2		; Si no encender led
-	RJMP salir
+	RJMP salir			; Saltar a salida
 	; Titileo de led
 apag3:
 	CLR led				; Borrar/resetear registro de led
@@ -1026,7 +1050,7 @@ RELOJ4:
 	CP R16, led			; Compararlo con el registro de led
 	BREQ apag4			; Si es igual saltar a apagar led
 	SBI PORTB, PB2		; Si no encender led
-	RJMP salir
+	RJMP salir			; Saltar a salida
 	; Titileo de LED
 apag4:
 	CLR led				; Borrar/resetear registro de led
@@ -1046,7 +1070,7 @@ RELOJ5:
 	CP R16, led			; Compararlo con el registro de led
 	BREQ apag5			; Si es igual saltar a apagar led
 	SBI PORTB, PB0		; Si no encender led
-	RJMP salir
+	RJMP salir			; Saltar a salida
 	; Titileo de led
 apag5:
 	CLR led				; Borrar/resetear registro de led
@@ -1066,7 +1090,7 @@ RELOJ6:
 	CP R16, led			; Compararlo con el registro de led
 	BREQ apag6			; Si es igual saltar a apagar led
 	SBI PORTB, PB0		; Si no encender led
-	RJMP salir
+	RJMP salir			; Saltar a salida
 	; Titileo de LED
 apag6:
 	CLR led				; Borrar/resetear registro de led
@@ -1279,7 +1303,7 @@ DELAY:
 	rebote1:
 		INC R19		; Incrementar valor de r19
 		CPI R19, 0	; Saltar si el valor de r19 es cero
-		BRNE rebote1
+		BRNE rebote1; Si no es igual saltar
 	RET
 ;----------------------------------------------------------------------------------------------------------------------
 ;**********************************************************************************************************************

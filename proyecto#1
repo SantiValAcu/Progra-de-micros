@@ -1,0 +1,1285 @@
+;****************************************************************
+; Universidad del Valle de Guatemala 
+; IE2023: Programación de Microcontroladores 
+; Test.asm 
+; 
+;Author: Santiago Valdez Acuña                                                       
+;Proyecto: Proyecto #1
+;Hardware: ATMega328P 
+;Creado: 02/03/2025 
+;Modificado: ---- 
+;Descipción: ----
+;****************************************************************
+
+.include "M328PDEF.inc"
+
+; Nombre de registros que utilizaré
+.def led = R2					; Registro para el led principal de segundos
+.def seg = R3					; Registro para contador de segundos
+.def unimin = R4				; Registro para la unidad de minutos
+.def decemin = R5				; Registro para la decena de minutos
+.def unihora = R6				; Registro para la unidad de hora
+.def decehora = R7				; Registro para la decena de hora
+.def unidia = R8				; Registro para la unidad de día
+.def decedia = R9				; Registro para la decena de día
+.def unimes = R10				; Registro para la unidad de mes
+.def decemes = R11				; Registro para la decena de mes
+.def conta1 = R12				; Registro para contar 0.25s
+.def conta2 = R13				; Registro para contar 0.75s
+.def MODE = R18					; Registro para el modo
+.def uniminA = R22				; Registro para la unidad de minutos de alarma
+.def deceminA = R23				; Registro para la decena de minutos de alarma
+.def unihoraA = R24				; Registro para la unidad de horas de alarma
+.def decehoraA = R25
+
+.cseg
+.org 0x0000 
+	JMP INICIO
+.org 0x0006						; Dirección de la interrupción PCINT0 (PORTB)
+	RJMP PCINT0_ISR
+.org 0x0008						; Dirección de la interrupción PCINT1 (PORTC)
+	RJMP PCINT1_ISR
+.org 0x0020						; Dirección de la interrupción timer0 overflow
+	JMP TMR0_ISR
+
+; Tabla de datos con la configuración de los números en display
+TABLA: 
+	.DB 0x77, 0x42, 0x6D, 0x6B, 0x5A, 0x3B, 0x3F, 0x62, 0x7F, 0x7B
+
+; Configuración de la pila
+INICIO:
+	LDI R16, LOW(RAMEND)
+	OUT SPL, R16		; Cargar 0xff a SPL
+	LDI R16, HIGH(RAMEND)
+	OUT SPH, R16		; Cargar 0x08 a SPH
+
+SETUP:
+	CLI					; Deshabilitar interrupciones globales
+	; Configurar Prescaler "Principal"
+	LDI R16, (1 << CLKPCE)
+	STS CLKPR, R16		; Habilitar cambio de PRESCALER
+	LDI R16, 0x03		; Cambio de frecuencia a 1MHz
+	STS CLKPR, R16
+
+	; Inicializamos el timer0
+	LDI R16, (1 << CS02	| 1 << CS00 ) 
+	OUT TCCR0B, R16		; Prescaler a 1024
+	LDI R16, 158
+	OUT TCNT0, R16		; Valor para realizar 0.1s
+
+	; Configuración de puertos
+	; Puerto D como salida para los LEDs del display
+	LDI R16, 0xFF
+    OUT DDRD, R16
+    LDI R16, 0x00		; LEDs apagados
+    OUT PORTD, R16
+
+	; Puerto C
+	; Como entrada de pushbottons
+	CBI DDRC, PC0	
+	CBI DDRC, PC1
+	SBI PORTC, PC0		; Botón incremento
+	SBI PORTC, PC1		; Botón decremento
+	; Como salida de transistores
+	SBI DDRC, PC2 
+	SBI DDRC, PC3
+	SBI DDRC, PC4
+	SBI DDRC, PC5
+	CBI PORTC, PC2		; Transistor display 1 
+	CBI PORTC, PC3		; Transistor display 2
+	CBI PORTC, PC4		; Transistor display 3
+	CBI PORTC, PC5		; Transistor display 4
+
+	; Puerto B
+	; Como salida de leds y buzzer
+	SBI DDRB, PB0
+	SBI DDRB, PB2
+	SBI DDRB, PB3
+	SBI DDRB, PB4
+	SBI DDRB, PB5
+	CBI PORTB, PB0		; LED de alarma
+	CBI PORTB, PB2		; LED de fecha
+	CBI PORTB, PB3		; LED de hora
+	CBI PORTB, PB4		; Buzzer
+	CBI PORTB, PB5		; LED de segundos
+	; Como entrada de pushbotton
+	CBI DDRB, PB1
+	SBI PORTB, PB1		; Botón de modo
+
+	; Configuración de interrupciones
+	; Interrupción de botones
+	LDI R16, (1 << PCIE0 | 1 << PCIE1)			; Habilitar el registro de control del PORTB y PORTC
+	STS PCICR, R16
+	LDI R16, (1 << PCINT1)						; Habilitar PB1
+	STS PCMSK0, R16								; Habilitar registro de mascara en PORTB
+	LDI R16, (1 << PCINT8 | 1 << PCINT9)		; Habilitar PC0 y PC1
+	STS PCMSK1, R16								; Habilitar registro de mascara en PORTC
+	; Interrupción de timer
+	LDI R16, (1 << TOIE0)						; Habilitar timer overflow
+	STS TIMSK0, R16
+	LDI R16, (1 << TOV0)						; Habilitar mascara overflow
+	STS TIFR0, R16
+
+	; Configuración de valores del display
+	; Cargar la dirección base de la tabla de valores del display en el puntero Z
+	LDI ZH, HIGH(TABLA << 1)					; Cargar la parte alta de la dirección de la tabla
+	LDI ZL, LOW(TABLA << 1)						; Cargar la parte baja de la dirección de la tabla  
+
+	;Configuración de valores iniciales
+	LDI R16, 1			; Cargar valor de 1 a R16
+	LDI R17, 0			; Contador TMR0 para reloj
+	LDI R20, 0			; Contador TMR0 para configuración hora
+	LDI R21, 0			; Contador TRM0 para configuración fecha
+	CLR MODE
+	CLR led
+	CLR conta1
+	CLR conta2
+	CLR seg
+	CLR unimin
+	CLR decemin
+	CLR unihora
+	CLR decehora
+	MOV unidia, R16		; Darle valor a unidad de día de 1
+	CLR decedia
+	MOV unimes, R16		; Darle valor a unidad de mes de 1
+	CLR decemes
+	CLR uniminA
+	CLR deceminA
+	CLR unihoraA
+	CLR decehoraA
+	SEI					; Habilitar interrupciones globales
+;**********************************************************************************************************************
+; Bucle principal
+LOOP:
+	IN R16, PORTB			; Cargar valores del puerto B a R16
+	SBRS R16, 0				; Saltar si el bit 0 está en 0 (LED de alarma apagado)
+	RJMP seguir				; Saltar a seguir
+	CP unimin, uniminA		; Comparar unidad de min con alarma
+	BRNE seguir				; Saltar si no es igual
+	CP decemin, deceminA	; Comparar decena de min con alarma
+	BRNE seguir				; Saltar si no es igual
+	CP unihora, unihoraA	; Comparar unidad de hora con alarma
+	BRNE seguir				; Saltar si no es igual
+	CP decehora, decehoraA	; Comparar decena de hora con alarma
+	BRNE seguir				; Saltar si no es igual
+	SBI PORTB, PB4			; Prender buzzer
+seguir:
+	CPI MODE, 0			; Comparar si se encuentra en el modo 0
+	BREQ HORA			; Si sí ir a la rutina de hora
+	CPI MODE, 1			; Comparar si se encuentra en el modo 1
+	BREQ SFECHA			; Si sí ir a la rutina de fecha
+	CPI MODE, 2			; Comparar si se encuentra en el modo 2
+	BREQ MOD1			; Si si ir a la rutina de modificación de hora
+	CPI MODE, 3			; Comparar si se encuentra en el modo 3
+	BREQ MOD1			; Si si ir a la rutina de modificación de hora
+	CPI MODE, 4			; Comparar si se encuentra en el modo 4
+	BREQ MOD2			; Si si ir a la rutina de modificación de fecha
+	CPI MODE, 5			; Comparar si se encuentra en el modo 5
+	BREQ MOD2			; Si si ir a la rutina de modificación de fecha
+	CPI MODE, 6			; Comparar si se encuentra en el modo 6
+	BREQ MOD3			; Si si ir a la rutina de modificación de alarma
+	CPI MODE, 7			; Comparar si se encuentra en el modo 7
+	BREQ MOD3			; Si si ir a la rutina de modificación de alarma
+	CPI MODE, 8			; Comparar si se encuentra en el modo 8
+	BREQ MOD3			; Si si ir a la rutina de modificación de alarma (confirmación de encender o apagar alarma)
+	RJMP LOOP			; Regreso al LOOP
+; Saltos largos
+SFECHA:
+	RJMP FECHA
+MOD1:
+	RJMP MODH			; Saltar a la rutina de modificación hora
+MOD2:
+	RJMP MODF			; Saltar a la rutina de modificación fecha
+MOD3:
+	RJMP MODA			; Saltar a la rutina de modificación alarma
+;**********************************************************************************************************************
+;----------------------------------------------------------------------------------------------------------------------
+; Configuración de rutina de modo de hora
+HORA:
+	CBI PORTB, PB2					; Apagar led de fecha
+	SBI PORTB, PB3					; Encender led de hora
+	; Encender valor de minutos
+	; Unidad de minuto
+	CBI PORTC, PC2					; Apagar transistor 1
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC5					; Encender transistor 4
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unimin					; Sumar el valor del registro de unidades de minuto a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de minuto
+	CBI PORTC, PC5					; Apagar transistor 4
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC4					; Encender transistor 3
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decemin					; Sumar el valor del registro de decenas de minuto a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Encender valor de horas
+	; Unidad de hora
+	CBI PORTC, PC4					; Apagar transistor 3
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC3					; Encender transistor 2
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unihora					; Sumar el valor del registro de unidades de hora a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de hora
+	CBI PORTC, PC3					; Apagar transistor 2
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC2					; Encender transistor 1
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decehora				; Sumar el valor del registro de decenas de hora a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	RJMP LOOP						; Regresar al LOOP principal
+; Configuración de rutina de modo de fecha
+FECHA:
+	CBI PORTB, PB3					; Apagar led de hora
+	SBI PORTB, PB2					; Encender led de fecha
+	; Encender valor de mes
+	; Unidad de mes
+	CBI PORTC, PC2					; Apagar transistor 1
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC5					; Encender transistor 4
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unimes					; Sumar el valor del registro de unidades de mes a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de mes
+	CBI PORTC, PC5					; Apagar transistor 4
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC4					; Encender transistor 3
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decemes					; Sumar el valor del registro de decenas de mes a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Encender valor de día
+	; Unidad de día
+	CBI PORTC, PC4					; Apagar transistor 3
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC3					; Encender transistor 2
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unidia					; Sumar el valor del registro de unidades de día a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de día
+	CBI PORTC, PC3					; Apagar transistor 2
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC2					; Encender transistor 1
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decedia					; Sumar el valor del registro de decenas de día a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	RJMP LOOP
+; Configuración de rutina de modo de configuración de hora
+MODH:
+	CBI PORTB, PB2					; Apagar led de fecha
+	SBI PORTB, PB5					; Encender led de segundos
+	; Unidad de minuto
+	CBI PORTC, PC2					; Apagar transistor 1
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC5					; Encender transistor 4
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unimin					; Sumar el valor del registro de unidades de minuto a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de minuto
+	CBI PORTC, PC5					; Apagar transistor 4
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC4					; Encender transistor 3
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decemin					; Sumar el valor del registro de decenas de minuto a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Encender valor de horas
+	; Unidad de hora
+	CBI PORTC, PC4					; Apagar transistor 3
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC3					; Encender transistor 2
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unihora					; Sumar el valor del registro de unidades de hora a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de hora
+	CBI PORTC, PC3					; Apagar transistor 2
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC2					; Encender transistor 1
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decehora				; Sumar el valor del registro de decenas de hora a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	RJMP LOOP
+; Configuración de rutina de modo de configuración de fecha
+MODF:
+	CBI PORTB, PB3					; Apagar led de hora
+	SBI PORTB, PB5					; Encender led de segundos
+	; Encender valor de mes
+	; Unidad de mes
+	CBI PORTC, PC2					; Apagar transistor 1
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC5					; Encender transistor 4
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unimes					; Sumar el valor del registro de unidades de mes a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de mes
+	CBI PORTC, PC5					; Apagar transistor 4
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC4					; Encender transistor 3
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decemes					; Sumar el valor del registro de decenas de mes a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Encender valor de día
+	; Unidad de día
+	CBI PORTC, PC4					; Apagar transistor 3
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC3					; Encender transistor 2
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unidia					; Sumar el valor del registro de unidades de día a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de día
+	CBI PORTC, PC3					; Apagar transistor 2
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC2					; Encender transistor 1
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decedia					; Sumar el valor del registro de decenas de día a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	RJMP LOOP
+; Configuración de rutina de modo de configuración de alarma
+MODA:
+	CBI PORTB, PB4
+	CBI PORTB, PB2					; Apagar led de fecha
+	SBI PORTB, PB5					; Encender led de segundos
+	; Encender valor de minutos alarma
+	; Unidad de minuto de alarma
+	CBI PORTC, PC2					; Apagar transistor 1
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC5					; Encender transistor 4
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, uniminA					; Sumar el valor del registro de unidades de minuto de alarma a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de minuto de alarma
+	CBI PORTC, PC5					; Apagar transistor 4
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC4					; Encender transistor 3
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, deceminA				; Sumar el valor del registro de decenas de minuto de alarma a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar valor en display
+	CALL DELAY						; Llamar DELAY
+	; Encender valor de horas de alarma
+	; Unidad de hora de alarma
+	CBI PORTC, PC4					; Apagar transistor 3
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC3					; Encender transistor 2
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, unihoraA				; Sumar el valor del registro de unidades de hora de alarma a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	; Decena de hora de alarma
+	CBI PORTC, PC3					; Apagar transistor 2
+	CALL DELAY						; Llamar DELAY
+	SBI PORTC, PC2					; Encender transistor 1
+	LDI ZL, LOW(TABLA << 1)         ; Establecer ZL en la parte baja de la dirección de la tabla
+    LDI ZH, HIGH(TABLA << 1)		; Establecer ZH en la parte alta de la dirección de la tabla
+	ADD ZL, decehoraA				; Sumar el valor del registro de decenas de hora de alarma a la parte baja de Z (ZL)
+    LPM								; Leer el valor de la tabla de segmentos para el dígito correspondiente
+    OUT PORTD, R0					; Mostrar en display
+	CALL DELAY						; Llamar DELAY
+	RJMP LOOP						; Regresar al LOOP principal
+;----------------------------------------------------------------------------------------------------------------------
+;**********************************************************************************************************************
+; Rutina de interrupción del PCINT0 (on-change)
+PCINT0_ISR:
+	PUSH R16			; Guardamos contenido de R16
+	IN R16, SREG	
+	PUSH R16			; Guardamos contenido de SREG
+	;-------------------------------------------------
+	IN R16, PINB
+	SBRS R16, 1			; Salta si PB1 está en 1 (no presionado)
+    INC MODE			; Incrementar regsitro de modo
+    CPI MODE, 9			; Verificar si el valor de modo es 8
+    BRNE continuar		; Si no es igual salta a continuar
+    CLR MODE			; Si es igual reinicia el modo a 0s
+continuar:
+	;------------------------------------------------
+	POP R16				
+	OUT SREG, R16		; Regresar el valor de SREG
+	POP R16				; Regresar el valor de R16
+	RETI
+;**********************************************************************************************************************
+;----------------------------------------------------------------------------------------------------------------------
+; Rutina de interrupción del PCINT1 (on-change)
+PCINT1_ISR:
+	PUSH R16			; Guardamos contenido de R16
+	IN R16, SREG	
+	PUSH R16			; Guardamos contenido de SREG
+	;-------------------------------------------------
+	CPI MODE, 0			; Comparamos registro modo con 0
+	BREQ apag_alarma	; Si es igual saltar a apag_alarma
+	CPI MODE, 1			; Si no, compararlo con 1
+	BREQ apag_alarma	; Si es igual saltar a apag_alarma
+	CPI MODE, 2			; Si no, compararlo con 2
+	BREQ PUSH1			; Si es igual saltar a PUSH1
+	CPI MODE, 3			; Si no, compararlo con 3
+	BREQ PUSH2			; Si es igual saltar a PUSH2
+	CPI MODE, 4			; Si no, compararlo con 4
+	BREQ SPUSH3			; Si es igual saltar a SPUSH3
+	CPI MODE, 5			; Si no, compararlo con 5
+	BREQ SPUSH4			; Si es igual saltar a SPUSH4
+	CPI MODE, 6			; Si no, compararlo con 6
+	BREQ SPUSH5			; Si es igual saltar a SPUSH5
+	CPI MODE, 7			; Si no, compararlo con 7
+	BREQ SPUSH6			; Si es igual saltar a SPUSH6
+	CPI MODE, 8			; Si no, compararlo con 8
+	BREQ SPUSH7			; Si es igual saltar a SPUSH7
+	RJMP salida			; Si no saltar a salida
+; Saltos largos
+SPUSH3:
+	RJMP PUSH3			; Salto a PUSH3
+SPUSH4:
+	RJMP PUSH4			; Salto a PUSH4
+SPUSH5:
+	RJMP PUSH5			; Salto a PUSH5
+SPUSH6:
+	RJMP PUSH6			; Salto a PUSH6
+SPUSH7:
+	RJMP PUSH7			; Salto a PUSH6
+;-----------------------------------------------------
+apag_alarma:
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 0			; Saltar si esta en 1 PC0 (prendido)
+	CBI PORTB, PB4		; Apagar buzzer
+	SBRS R16, 1			; Saltar si esta en 1 PC1 (prendido)
+	CBI PORTB, PB4		; Apagar buzzer
+	RJMP salida			; Saltar a salida
+PUSH1:
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 0			; Saltar si esta en 1 PC0 (no presionado)
+	INC unimin			; Incrementar registro de unidad de minuto
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unimin		; Compararlo con registro de unidad de minuto
+	BRNE conti1			; Saltar si no es igual
+	CLR unimin			; Borrar/resetear registro de unidad de minuto
+	INC decemin			; Incrementar registro de decena de minuto
+	LDI R16, 6			; Darle el valor de 6 a R16
+	CP R16, decemin		; Compararlo con decena de minuto
+	BRNE conti1			; Saltar si no es igual
+	CLR decemin			; Borrar/resetear registro de decena de minuto
+conti1:
+	IN R16, PINC		; Leer PINC en R16
+    SBRS R16, 1			; Saltar si esta en 1 PC1 (no presionado)
+	DEC unimin			; Decrementar registro de unidad de minuto
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unimin		; Compararlo con unidad de minuto
+	BRNE conti2			; Saltar si no es igual
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unimin, R16		; Darle el valor de 9 a unidad de minuto
+	DEC decemin			; Decrementar registro de decena de minuto
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, decemin		; Compararlo con decena de minuto
+	BRNE conti2			; Saltar si no es igual
+	LDI R16, 5			; Darle el valor de 5 a R16
+	MOV decemin, R16	; Darle el valor de 5 a decena de minuto
+conti2:
+	RJMP salida			; Saltar a salida
+;-----------------------------------------------------
+PUSH2:
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 0			; Saltar si esta en 1 PC0 (no presionado)
+	INC unihora			; Incrementar registro de unidad de hora
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, decehora	; Compararlo con decena de hora
+	BRNE regreso		; Saltar si no es igual
+	LDI R16, 4			; Darle el valor de 4 a R16
+	CP R16, unihora		; Compararlo con unidad de hora
+	BRNE regreso		; Saltar si no es igual
+	CLR decehora		; Borrar/resetear registro de decena de hora
+	CLR unihora			; Borrar/resetear registro de unidad de hora
+	RJMP conti3			; Saltar a conti3
+regreso:	
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unihora		; Compararlo con unidad de hora
+	BRNE conti3			; Saltar si no es igual
+	CLR unihora			; Borrar/resetear registro de unidad de hora
+	INC decehora		; Incrementar registro de decena de hora
+conti3:
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 1			; Saltar si esta en 1 PC1 (no presionado)
+	DEC unihora			; Decrementar unidad de hora
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decehora	; Comparar con decena de hora
+	BRNE regreso1		; Si no es igual saltar
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unihora		; Compararlo con unidad de hora
+	BRNE regreso1		; Si no es igual saltar a regreso1
+	LDI R16, 2			; Darle el valor de 2 a R16
+	MOV decehora, R16	; Darle el valor de 2 a decena de hora
+	LDI R16, 3			; Darle el valor de 3 a R16
+	MOV unihora, R16	; Darle el valor de 3 a unidad de hora
+regreso1:
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unihora		; Compararlo con unidad de hora
+	BRNE conti4			; Saltar si no es igual
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unihora, R16	; Darle el valor de 9 a unidad de hora
+	DEC decehora		; Decrementar decena de hora
+conti4:
+	RJMP salida			; Saltar a salida
+;-----------------------------------------------------
+PUSH3:
+	IN R16, PINC        ; Leer PINC en R16
+    SBRS R16, 0         ; Saltar si PC0 está en 1 (no presionado)
+    INC unimes			; Incrementar registro unidad de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	CP R16, decemes 	; Compararlo con decena de mes
+	BRNE regreso2		; Saltar si no es igual
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, unimes		; Compararlo con unidad de mes
+	BRNE regreso2		; Saltar si no es igual
+	CLR decemes			; Borrar/resetear registro de decena de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unimes, R16		; darle el valor de 1 a unidades de mes
+	RJMP conti5			; Saltar a conti5
+regreso2:	
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unimes		; Compararlo con unidad de mes
+	BRNE conti5			; Saltar si no es igual
+	CLR unimes			; Borrar/resetear registro de unidad de mes
+	INC decemes			; Incrementar registro de decena de mes
+conti5:
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 1			; Saltar si esta en 1 PC1 (no presionado)
+	DEC unimes			; Decrementar unidad de mes
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decemes		; Comparar con decena de mes
+	BRNE regreso3		; Si no es igual saltar
+	CP R16, unimes		; Compararlo con unidad de mes
+	BRNE regreso3		; Si no es igual saltar
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV decemes, R16	; Darle el valor de 1 a decena de mes
+	LDI R16, 2			; Darle el valor de 2 a R16
+	MOV unimes, R16		; Darle el valor de 2 a unidad de mes
+	RJMP salida			; Saltar a salida
+regreso3:
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unimes		; Compararlo con unidad de mes
+	BRNE conti6			; Saltar si no es igual
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unimes, R16		; Darle el valor de 9 a unidad de mes
+	DEC decemes			; Decrementar decena de mes
+conti6:
+	RJMP salida			; Saltar a salida
+;-----------------------------------------------------
+PUSH4:
+	IN R16, PINC        ; Leer PINC en R16
+    SBRS R16, 0         ; Saltar si PC0 está en 1 (no presionado)
+    RJMP incdia			; Saltar a incdia
+    SBRS R16, 1         ; Saltar si PC1 está en 1 (no presionado)
+    RJMP decdia			; Saltar a decdia
+	RJMP salida			; Saltar a salida
+incdia:
+	INC unidia			; Incrementar registro de unidad de día
+	; Verificarmos mes actual
+	MOV R16, unimes		; Movemos valor de unidad de mes a R16
+	CPI R16, 0			; Comparamos si es 0
+	BREQ inc31			; Si sí ir a "mes de 31 días"
+	CPI R16, 1			; Comparamos si es 1
+	BREQ VERI3			; Si sí ir a "verificación 1.0"
+	CPI R16, 2			; Comparamos si es 2
+	BREQ VERI4			; Si sí ir a "verificación 2.0"
+	CPI R16, 3			; Comparamos si es 3
+	BREQ inc31			; Si sí ir a "mes de 31 días"
+	CPI R16, 4			; Comparamos si es 4
+	BREQ inc30			; Si sí ir a "mes de 30 días"
+	CPI R16, 5			; Comparamos si es 5
+	BREQ inc31			; Si sí ir a "mes de 31 días"
+	CPI R16, 6			; Comparamos si es 6
+	BREQ inc30			; Si sí ir a "mes de 30 días"
+	CPI R16, 7			; Comparamos si es 7
+	BREQ inc31			; Si sí ir a "mes de 31 días"
+	CPI R16, 8			; Comparamos si es 8
+	BREQ inc31			; Si sí ir a "mes de 31 días"
+	CPI R16, 9			; Comparamos si es 9
+	BREQ inc30			; Si sí ir a "mes de 30 días"
+inc31:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ inc31_1		; Si es igual saltar a inc31_1
+	LDI R16, 10			; Si no, darle el valor de 10 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ overID			; Si es igual saltar a overID
+	RJMP salida			; Si no saltar a salida
+inc31_1:
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit1			; Si no es igual saltar
+	CLR decedia			; Borrar/resetear registro de unidad de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unidia, R16		; Darle el valor de 1 a unidad de día
+	RJMP salida			; Si no saltar a salida
+inc30:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ inc30_1		; Si es igual saltar a inc30_1
+	LDI R16, 10			; Si no, darle el valor de 10 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ overID			; Si es igual saltar a overID
+	RJMP salida			; Si no saltar a salida
+inc30_1:
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, unidia		; Compararlo con registro de unidad de día
+	BREQ error			; Si es igual saltar a error
+	LDI R16, 1			; Darle el valor de 1 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit1			; Si no es igual saltar
+	CLR decedia			; Borrar/resetear registro de unidad de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unidia, R16		; Darle el valor de 1 a unidad de dia
+	RJMP salida			; Saltar a salida
+VERI3:
+	MOV R16, decemes	; Mover valor de decena de mes a R16
+	CPI R16, 0			; Compararlo con 0
+	BREQ inc31			; Si es igual saltar a "mes de 31 días"
+	RJMP inc30			; Si no saltar a "mes de 30 días"
+VERI4:
+	MOV R16, decemes	; Mover valor de decena de mes a R16
+	CPI R16, 0			; Compararlo con 0
+	BREQ FEB1			; Si es igual saltar a "mes de febrero"
+	RJMP inc31			; Si no saltar a "mes de 31 días"
+FEB1:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con el registro de decena de día
+	BREQ error			; Si es igual saltar a error
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ FEB1_1			; Si es igual saltar a FEB1_1
+	LDI R16, 10			; Si no, darle el valor de 10 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ overID			; Si es igual saltar a overID
+	RJMP salida			; Saltar a salida
+FEB1_1:
+	LDI R16, 9			; Darle el valor de 9 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit1			; Si no es igual saltar
+	CLR decedia			; Borrar/resetear registro de unidad de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unidia, R16		; Darle el valor de 1 a unidad de día
+	RJMP salida			; Saltar a salida
+error:
+	CLR decedia			; Borrar/resetear registro de unidad de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unidia, R16		; Darle el valor de 1 a unidad de día
+	RJMP salida			; Saltar a salida
+overID:
+	CLR unidia			; Borrar/resetear registro de unidad de mes
+	INC decedia			; Incrementar regitro de decena de día
+exit1:
+	RJMP salida			; Saltar a salida
+decdia:
+	DEC unidia			; Decrementar registro de unidad de día
+	; Verificarmos mes actual
+	MOV R16, unimes		; Movemos valor de unidad de mes a R16
+	CPI R16, 0			; Comparamos si es 0
+	BREQ dec31			; Si sí ir a "mes de 31 días"
+	CPI R16, 1			; Comparamos si es 1
+	BREQ VERI5			; Si sí ir a "verificación 1.0"
+	CPI R16, 2			; Comparamos si es 2
+	BREQ VERI6			; Si sí ir a "verificación 2.0"
+	CPI R16, 3			; Comparamos si es 3
+	BREQ dec31			; Si sí ir a "mes de 31 días"
+	CPI R16, 4			; Comparamos si es 4
+	BREQ dec30			; Si sí ir a "mes de 30 días"
+	CPI R16, 5			; Comparamos si es 5
+	BREQ dec31			; Si sí ir a "mes de 31 días"
+	CPI R16, 6			; Comparamos si es 6
+	BREQ dec30			; Si sí ir a "mes de 30 días"
+	CPI R16, 7			; Comparamos si es 7
+	BREQ dec31			; Si sí ir a "mes de 31 días"
+	CPI R16, 8			; Comparamos si es 8
+	BREQ dec31			; Si sí ir a "mes de 31 días"
+	CPI R16, 9			; Comparamos si es 9
+	BREQ dec30			; Si sí ir a "mes de 30 días"
+Sexit:
+	RJMP exit			; Saltar a exit
+dec31:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ dec31_1		; Si es igual saltar a dec31_1
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE Sexit			; Si no es igual saltar
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unidia, R16		; Darle el valor de 9 a unidad de día
+	DEC decedia			; Decrementar registro de decena de día
+	RJMP salida			; Saltar a salida
+dec31_1:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit			; Si no es igual saltar
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unidia, R16		; Darle el valor de 1 a unidad de día
+	LDI R16, 3			; Darle el valor de 3 a R16
+	MOV decedia, R16	; Darle el valor de 3 a decena de día
+dec30:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ dec30_1		; Si es igual saltar a dec30_1
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit			; Si no es igual saltar
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unidia, R16		; Darle el valor de 9 a unidad de día
+	DEC decedia			; Decrementar registro de decena de día
+	RJMP salida			; Saltar a salida
+dec30_1:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit			; Si no es igual saltar exit
+	LDI R16, 0			; Darle el valor de 0 a R16
+	MOV unidia, R16		; Darle el valor e 0 a unidad de día
+	LDI R16, 3			; Darle el valor de 3 a R16
+	MOV decedia, R16	; Darle el valor de 3 a decena de día
+VERI5:
+	LDI R16, 1			; Darle el valor de 1 a R16
+	CP R16, decemes		; Compararlo con decena de mes
+	BREQ dec30			; Si es igual saltar a dec30
+	RJMP dec31			; Saltar a dec31
+VERI6:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decemes		; Compararlo con decena de mes
+	BREQ FEB2			; Si es igual saltar a FEB2
+	RJMP dec31			; Saltar a dec31
+FEB2:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ error1			; Si es igual saltar a error1
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ P_error		; Si es igual saltar a P_error
+N_error:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ FEB2_2			; Si es igual saltar a FEB2_2
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit			; Si no es igual saltar
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unidia, R16		; Darle el valor de 9 a unidad de día
+	DEC decedia			; Decrementar registro de día
+	RJMP salida			; Saltar a salida
+FEB2_2:
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE exit			; Si no es igual saltar
+error1:
+	LDI R16, 8			; Darle el valor de 8 a R16
+	MOV unidia, R16		; Darle el valor de 8 a unidad de día
+	LDI R16, 2			; Darle el valor de 2 a R16
+	MOV decedia, R16	; Darle el valor de 2 a decena de día
+	RJMP salida			; Saltar a salida
+P_error:
+	LDI R16, 9			; Darle el valor de 9 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BRNE N_error		; Si nop es igual saltar
+	RJMP error1			; Saltar a error1
+exit:
+	RJMP salida			; Saltar a salida
+;-----------------------------------------------------
+PUSH5:
+	CBI PORTB, PB4
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 0			; Saltar si esta en 1 PC0 (no presionado)
+	INC uniminA			; Incrementar registro de unidad de minuto de alarma
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, uniminA		; Compararlo con unidad de minuto de alarma
+	BRNE conti7			; Saltar si no es igual
+	CLR uniminA			; Borrar/resetear registro de unidad de minuto de alarma
+	INC deceminA		; Incrementar registro de decena de minuto de alarma
+	LDI R16, 6			; Darle el valor de 6 a R16
+	CP R16, deceminA	; Compararlo con decena de minuto de alarma
+	BRNE conti7			; Saltar si no es igual
+	CLR deceminA		; Borrar/resetear registro de decena de minuto de alarma
+conti7:
+	IN R16, PINC		; Leer PINC en R16
+    SBRS R16, 1			; Saltar si esta en 1 PC1 (no presionado)
+	DEC uniminA			; Decrementar registro de unidad de minuto de alarma
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, uniminA		; Compararlo con unidad de minuto de alarma
+	BRNE conti8			; Saltar si no es igual
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV uniminA, R16	; Darle el valor de 9 a unidad de minuto de alarma
+	DEC deceminA		; Decrementar registro de decena de minuto de alarma
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, deceminA	; Compararlo con decena de minuto de alarma
+	BRNE conti8			; Saltar si no es igual
+	LDI R16, 5			; Darle el valor de 5 a R16
+	MOV deceminA, R16	; Darle el valor de 5 a decena de minuto de alarma
+conti8:
+	RJMP salida			; Saltar a salida
+;-----------------------------------------------------
+PUSH6:
+	CBI PORTB, PB4
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 0			; Saltar si esta en 1 PC0 (no presionado)
+	INC unihoraA		; Incrementar registro de unidad de hora de alarma
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, decehoraA	; Compararlo con decena de hora de alarma
+	BRNE regreso4		; Saltar si no es igual
+	LDI R16, 4			; Darle el valor de 4 a R16
+	CP R16, unihoraA	; Compararlo con unidad de hora de alarma
+	BRNE regreso4		; Saltar si no es igual
+	CLR decehoraA		; Borrar/resetear registro de decena de hora de alarma
+	CLR unihoraA		; Borrar/resetear registro de unidad de hora de alarma
+	RJMP conti9			; Saltar a conti9
+regreso4:	
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unihoraA	; Compararlo con unidad de hora de alarma
+	BRNE conti9			; Saltar si no es igual
+	CLR unihoraA		; Borrar/resetear registro de unidad de hora de alarma
+	INC decehoraA		; Incrementar registro de decena de hora de alarma
+conti9:
+	IN R16, PINC		; Leer PINC en R16
+	SBRS R16, 1			; Saltar si esta en 1 PC1 (no presionado)
+	DEC unihoraA		; Decrementar unidad de hora de alarma
+	LDI R16, 0			; Darle el valor de 0 a R16
+	CP R16, decehoraA	; Comparar con decena de hora de alarma
+	BRNE regreso5		; Si no es igual saltar
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unihoraA	; Compararlo con unidad de hora de alarma
+	BRNE regreso5		; Si no es igual saltar a regreso1
+	LDI R16, 2			; Darle el valor de 2 a R16
+	MOV decehoraA, R16	; Darle el valor de 2 a decena de hora de alarma
+	LDI R16, 3			; Darle el valor de 3 a R16
+	MOV unihoraA, R16	; Darle el valor de 3 a unidad de hora de alarma
+regreso5:
+	LDI R16, 0xFF		; Darle el valor de 255 (-1) a R16
+	CP R16, unihoraA	; Compararlo con unidad de hora de alarma
+	BRNE conti10		; Saltar si no es igual
+	LDI R16, 9			; Darle el valor de 9 a R16
+	MOV unihoraA, R16	; Darle el valor de 9 a unidad de hora de alarma
+	DEC decehoraA		; Decrementar decena de hora de alarma
+conti10:
+	RJMP salida			; Salar a salida
+;-----------------------------------------------------
+PUSH7:
+	CBI PORTB, PB4		; Apagar buzzer
+	IN R16, PINC        ; Leer PINC en R16
+    SBRS R16, 0         ; Saltar si PC0 está en 1 (no presionado)
+    CBI PORTB, PB0		; Apagar led de alarma
+    SBRS R16, 1         ; Saltar si PC1 está en 1 (no presionado)
+    SBI PORTB, PB0		; Encender led de alarma
+	RJMP salida			; Saltar a salida
+salida:
+	;------------------------------------------------
+	POP R16				
+	OUT SREG, R16		; Regresar el valor de SREG
+	POP R16				; Regresar el valor de R16
+	RETI
+;----------------------------------------------------------------------------------------------------------------------
+;**********************************************************************************************************************
+; Rutina de interrupción del TMR0
+TMR0_ISR:
+    PUSH R16            ; Guardamos contenido de R16
+    IN R16, SREG    
+    PUSH R16            ; Guardamos contenido de SREG
+    ;-------------------------------------------------
+	CPI MODE, 0			; Comparar modo con 0
+	BREQ SRELOJP		; Si es igual saltar a RELOJP
+	CPI MODE, 1			; Si no, comparar modo con 1
+	BREQ SRELOJP		; Si es igual saltar a RELOJP
+	CPI MODE, 2			; Si no, comparar modo con 2
+	BREQ RELOJ1			; Si es igual saltar a RELOJ1
+	CPI MODE, 3			; Si no, comparar modo con 3
+	BREQ RELOJ2			; Si es igual saltar a RELOJ2
+	CPI MODE, 4			; Si no, comparar modo con 4
+	BREQ RELOJ3			; Si es igual saltar a RELOJ3
+	CPI MODE, 5			; Si no, comparar modo con 5
+	BREQ RELOJ4			; Si es igual saltar a RELOJ4
+	CPI MODE, 6			; Si no, comparar modo con 6
+	BREQ SRELOJ5		; Si es ifual saltar a SRELOJ5
+	CPI MODE, 7			; Si no, comparar modo con 7
+	BREQ SRELOJ6		; Si es ifual saltar a SRELOJ6
+	RJMP salir
+; Saltos largos
+SRELOJP:
+	RJMP RELOJP			; Saltar a RELOJP
+SRELOJ5:
+	RJMP RELOJ5			; Saltar a RELOJ5
+SRELOJ6:
+	RJMP RELOJ6			; Saltar a RELOJ5
+Ssalir:
+	RJMP salir
+;-----------------------------------------------------
+RELOJ1:
+	LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC conta1			; Incrementar conta1
+	LDI R16, 5			; Darle el valor de 5 a R16
+    CP conta1, r16	    ; Compararlo con conta1, repetirlo cinco veces
+    BRNE Ssalir         ; Si no ir a salida
+    CLR conta1			; Si sí, limpiar el contador
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag1			; Si es igual saltar a apagar led
+	SBI PORTB, PB3		; Si no encender led
+	RJMP salir
+	; Titileo de LED
+apag1:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB3		; Apagar led
+	RJMP salir			; Saltar a salida
+;-----------------------------------------------------
+RELOJ2:
+	LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC conta2			; Incrementar conta2
+	LDI R16, 15			; Darle el valor de 5 a R16
+    CP conta2, r16	    ; Compararlo con conta1, repetirlo cinco veces
+    BRNE Ssalir         ; Si no ir a salida
+    CLR conta2          ; Si sí, limpiar el contador
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag2			; Si es igual saltar a apagar led
+	SBI PORTB, PB3		; Si no encender led
+	RJMP salir
+	; Titileo de LED
+apag2:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB3		; Apagar led
+	RJMP salir			; Saltar a salida
+;-----------------------------------------------------
+RELOJ3:
+	LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC conta1			; Incrementar conta1
+	LDI R16, 5			; Darle el valor de 5 a R16
+    CP conta1, r16	    ; Compararlo con conta1, repetirlo cinco veces
+    BRNE Ssalir          ; Si no ir a salida
+    CLR conta1          ; Si sí, limpiar el contador
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag3			; Si es igual saltar a apagar led
+	SBI PORTB, PB2		; Si no encender led
+	RJMP salir
+	; Titileo de led
+apag3:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB2		; Apagar led
+	RJMP salir			; Saltar a salida
+;-----------------------------------------------------
+RELOJ4:
+	LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC conta2			; Incrementar conta2
+	LDI R16, 15			; Darle el valor de 5 a R16
+    CP conta2, r16	    ; Compararlo con conta1, repetirlo cinco veces
+    BRNE salir          ; Si no ir a salida
+    CLR conta2          ; Si sí, limpiar el contador
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag4			; Si es igual saltar a apagar led
+	SBI PORTB, PB2		; Si no encender led
+	RJMP salir
+	; Titileo de LED
+apag4:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB2		; Apagar led
+	RJMP salir			; Saltar a salida
+;-----------------------------------------------------
+RELOJ5:
+	LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC conta1			; Incrementar conta1
+	LDI R16, 5			; Darle el valor de 5 a R16
+    CP conta1, r16	    ; Compararlo con conta1, repetirlo cinco veces
+    BRNE salir          ; Si no ir a salida
+    CLR conta1          ; Si sí, limpiar el contador
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag5			; Si es igual saltar a apagar led
+	SBI PORTB, PB0		; Si no encender led
+	RJMP salir
+	; Titileo de led
+apag5:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB0		; Apagar led
+	RJMP salir			; Saltar a salida
+;-----------------------------------------------------
+RELOJ6:
+	LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC conta2			; Incrementar conta2
+	LDI R16, 15			; Darle el valor de 5 a R16
+    CP conta2, r16	    ; Compararlo con conta1, repetirlo cinco veces
+    BRNE salir          ; Si no ir a salida
+    CLR conta2          ; Si sí, limpiar el contador
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag6			; Si es igual saltar a apagar led
+	SBI PORTB, PB0		; Si no encender led
+	RJMP salir
+	; Titileo de LED
+apag6:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB0		; Apagar led
+	RJMP salir			; Saltar a salida
+;-----------------------------------------------------
+RELOJP:
+    LDI R16, 158        ; Cargar valor del TCNT0
+    OUT TCNT0, R16
+    INC R17             ; Incrementar R17
+    CPI R17, 10         ; Verificar si ya pasaron 0.5s (no es 5 porque va muy rápido)
+    BRNE salir          ; Si no ir a salida
+    CLR R17             ; Si sí, limpiar el contador
+; LED de segundos
+	INC led				; Incrementar registro de led 
+	LDI R16, 2			; Darle el valor de 2 al R16
+	CP R16, led			; Compararlo con el registro de led
+	BREQ apag			; Si es igual saltar a apagar led
+	SBI PORTB, PB5		; Si no encender led
+	RJMP salir			; Saltar a salida
+; Incremento de segundos
+apag:
+	CLR led				; Borrar/resetear registro de led
+	CBI PORTB, PB5		; Apagar led
+	INC seg				; Incrementar el registro de segundos
+	LDI R16, 60			; Darle el valor de 60 a R16
+	CP R16, seg			; Compararlo con el registro de minutos
+	BREQ over0			; Si es igual hacer salto a over0
+salir:
+    ;------------------------------------------------
+    POP R16
+    OUT SREG, R16       ; Regresar el valor de SREG
+    POP R16             ; Regresar el valor de R16
+    RETI                ; Retornar de la interrupción
+
+; Incremento de unidades de min
+over0:
+	CLR seg				; Borrar/resetear registro de seg
+	INC unimin			; Incrementar registro de unidad de minuto
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unimin		; Compararlo con unidad de minuto
+	BREQ over1			; Si es igual hacer salto a over1
+	RJMP salir			; Si no saltar a salida
+; Incremento de decenas de min
+over1:
+	CLR unimin			; Borrar/resetear registro de unidad de minuto
+	INC decemin			; Incrementar registro de decena de minuto
+	LDI R16, 6			; Darle el valor de 6 a R16
+	CP R16, decemin		; Compararlo con decena de minuto
+	BREQ over2			; Si es igual hacer salto a over2
+	RJMP salir			; Si no saltar a salida
+; Incremento de unidades de hora
+over2: 
+	CLR decemin			; Borrar/resetear registro de decena de minuto
+	LDI r16, 2			; Darle el valor de 2 a R16
+	CP R16, decehora	; Compararlo con decena de hora
+	BREQ over2_1		; Si es igual hacer salto a over2.1
+	INC unihora			; Si no, incrementar registro de unidad de hora
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unihora		; Compararlo con unidad de hora
+	BREQ over3			; Si es igual hacer salto a over3
+	RJMP salir			; Si no saltar a salida
+over2_1:
+	INC unihora			; Incrementar registro de unidad de hora
+	LDI R16, 4			; Darle el valor de 4 a R16
+	CP R16, unihora		; Compararlo con unidad de hora
+	BREQ over3			; Si es igual hacer salto a over3
+	RJMP salir			; Si no saltar a salida
+; Incremento de decenas de hora
+over3: 
+	CLR unihora			; Borrar/resetear registro de unidad de hora
+	INC decehora		; Incrementar registro de decenas de hora
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decehora	; Compararlo con decenas de hora
+	BREQ over4			; Si es igual hacer salto a over4
+	RJMP salir			; Si no saltar a salida
+; Incremento de unidades de día
+over4:
+	CLR decehora		; Borrar/resetear registro de decena de hora
+	INC unidia			; Incrementar registro de unidad de día
+	; Verificarmos mes actual
+	MOV R16, unimes		; Movemos valor de unidad de mes a R16
+	CPI R16, 0			; Comparamos si es 0
+	BREQ mes31			; Si sí ir a "mes de 31 días"
+	CPI R16, 1			; Comparamos si es 1
+	BREQ VERI1			; Si sí ir a "verificación 1.0"
+	CPI R16, 2			; Comparamos si es 2
+	BREQ VERI2			; Si sí ir a "verificación 2.0"
+	CPI R16, 3			; Comparamos si es 3
+	BREQ mes31			; Si sí ir a "mes de 31 días"
+	CPI R16, 4			; Comparamos si es 4
+	BREQ mes30			; Si sí ir a "mes de 30 días"
+	CPI R16, 5			; Comparamos si es 5
+	BREQ mes31			; Si sí ir a "mes de 31 días"
+	CPI R16, 6			; Comparamos si es 6
+	BREQ mes30			; Si sí ir a "mes de 30 días"
+	CPI R16, 7			; Comparamos si es 7
+	BREQ mes31			; Si sí ir a "mes de 31 días"
+	CPI R16, 8			; Comparamos si es 8
+	BREQ mes31			; Si sí ir a "mes de 31 días"
+	CPI R16, 9			; Comparamos si es 9
+	BREQ mes30			; Si sí ir a "mes de 30 días"
+mes31:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ mes31_1		; Si es igual saltar a mes31_1
+	LDI R16, 10			; Si no, darle el valor de 10 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ over5			; Si es igual saltar a over5
+	RJMP salir			; Si no saltar a salida
+mes31_1:
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ over5			; Si es igual saltar a over5
+	RJMP salir			; Si no saltar a salida
+mes30:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ mes30_1		; Si es igual saltar a mes30_1
+	LDI R16, 10			; Si no, darle el valor de 10 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ over5			; Si es igual saltar a over5
+	RJMP salir			; Si no saltar a salida
+mes30_1:
+	LDI R16, 1			; Darle el valor de 1 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ over5			; Si es igual saltar a over5
+	RJMP salir			; Si no saltar a salida
+VERI1:
+	MOV R16, decemes	; Mover valor de decena de mes a R16
+	CPI R16, 0			; Compararlo con 0
+	BREQ mes31			; Si es igual saltar a "mes de 31 días"
+	RJMP mes30			; Si no saltar a "mes de 30 días"
+VERI2:
+	MOV R16, decemes	; Mover valor de decena de mes a R16
+	CPI R16, 0			; Compararlo con 0
+	BREQ FEB			; Si es igual saltar a "mes de febrero"
+	RJMP mes31			; Si no saltar a "mes de 31 días"
+FEB:
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ FEB_1			; Si es igual saltar a FEB_1
+	LDI R16, 10			; Si no, darle el valor de 10 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ over5			; Si es igual saltar a over5
+	RJMP salir			; Si no saltar a salida
+FEB_1:
+	LDI R16, 9			; Darle el valor de 9 a R16
+	CP R16, unidia		; Compararlo con unidad de día
+	BREQ over5			; Si es igual saltar a over5
+	RJMP salir		
+; Incremento de decenas de día
+over5:
+	CLR	unidia			; Borrar/resetear registro de unidad de día
+	; Verificarmos mes actual
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, unimes		; Compararlo con unidad de mes
+	BREQ DFEB			; Si es igual saltar a DFEB
+DDIC:
+	INC decedia			; Incrementar registro de decena de día
+	LDI R16, 4			; Darle el valor de 4 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ over6			; Si es igual saltar a over6
+	RJMP salir			; Si no saltar a salida
+DFEB:
+	LDI R16, 1			; Darle el valor de 1 a R16
+	CP R16, decemes		; Compararlo con decena de mes
+	BREQ DDIC			; Si es igual saltar a DDIC
+	INC decedia			; Incrementar registro de decena de día
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, decedia		; Compararlo con decena de día
+	BREQ over6			; Si es igual saltar a over6
+	RJMP salir			; Si no saltar a salida
+; Incremento de unidades de mes
+over6:
+	INC unimes			; Incrementar registro de unidad de mes
+	CLR decedia			; Borrar/resetear registro de decena de día
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unidia, R16		; Darle el valor de 1 a unidad de día
+	LDI R16, 1			; Darle el valor de 1 a R16
+	CP R16, decemes		; Compararlo con decenas de mes
+	BREQ over6_1		; Si es igual saltar a over6_1
+	LDI R16, 10			; Darle el valor de 10 a R16
+	CP R16, unimes		; Compararlo con unidad de mes
+	BREQ over7			; Si es igual saltar a over7
+	RJMP salir			; Si no saltar a salida
+over6_1:
+	LDI R16, 3			; Darle el valor de 3 a R16
+	CP R16, unimes		; Compararlo con unidad de mes
+	BREQ over7			; Si es igual saltar a over7
+	RJMP salir			; Si no saltar a salida
+; Incremento de decenas de mes
+over7:
+	CLR unimes			; Borrar/resetear registro de unidad de mes
+	INC decemes			; Incrementar registro de decena de mes
+	LDI R16, 2			; Darle el valor de 2 a R16
+	CP R16, decemes		; Compararlo con decena de mes
+	BREQ over8			; Si es igual saltar a over8
+	RJMP salir			; Si no saltar a salida
+over8:
+	CLR decemes			; Borrar/resetear registro de decena de mes
+	LDI R16, 1			; Darle el valor de 1 a R16
+	MOV unimes, R16		; Darle el valor de 1 a unidad de mes
+	RJMP salir			; Saltar a salida
+;**********************************************************************************************************************
+;----------------------------------------------------------------------------------------------------------------------
+; Rutina de delay
+DELAY:
+	LDI R19, 0		; Valor inicial para r19
+	rebote1:
+		INC R19		; Incrementar valor de r19
+		CPI R19, 0	; Saltar si el valor de r19 es cero
+		BRNE rebote1
+	RET
+;----------------------------------------------------------------------------------------------------------------------
+;**********************************************************************************************************************

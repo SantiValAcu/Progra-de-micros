@@ -27,10 +27,10 @@
 .def conta1 = R12				; Registro para contar 0.25s
 .def conta2 = R13				; Registro para contar 0.75s
 .def MODE = R18					; Registro para el modo
-.def uniminA = R22				; Registro para la unidad de minutos de alarma
-.def deceminA = R23				; Registro para la decena de minutos de alarma
-.def unihoraA = R24				; Registro para la unidad de horas de alarma
-.def decehoraA = R25
+.def uniminA = R20				; Registro para la unidad de minutos de alarma
+.def deceminA = R21				; Registro para la decena de minutos de alarma
+.def unihoraA = R22				; Registro para la unidad de horas de alarma
+.def decehoraA = R23			; Registro pára la decena de horas de alarma
 
 .cseg
 .org 0x0000 
@@ -128,8 +128,6 @@ SETUP:
 	;Configuración de valores iniciales
 	LDI R16, 1			; Cargar valor de 1 a R16
 	LDI R17, 0			; Contador TMR0 para reloj
-	LDI R20, 0			; Contador TMR0 para configuración hora
-	LDI R21, 0			; Contador TRM0 para configuración fecha
 	CLR MODE
 	CLR led
 	CLR conta1

@@ -1,0 +1,56 @@
+/*
+ * Prelab4.c
+ *
+ * Created: 2/4/2025
+ * Author: Santiago Valdez Acuña
+ * Description: Contador binario de 8 bits. Utilizando 2 pushbuttons para aumentar y decrementar contador.
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+// Nombres variables
+uint8_t contador;
+/****************************************/
+// Function prototypes
+void setup();
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();		// configurar MCU
+    while (1) 
+    {
+    }
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup()
+{
+	cli();										// Desactivar interrupciones globales
+	// Configurar PORTD como salida
+	DDRD    = 0xFF;
+	PORTD   = 0x00;								// Inicializar LEDs en 0
+	// Configurar PORTB como entrada 
+	DDRB &= ~(1 << PB0) & ~(1 << PB1);
+	PORTB |= (1 << PB0) | (1 << PB1); 
+	// Configurar interrupciones pinchange
+	PCICR |= (1 << PCIE0);						// Habilitar interrupciones para portB
+	PCMSK0 |= (1 << PCINT0) | (1 << PCINT1);	// Habilitar interrupción en PB0 y PB1
+	contador = 0;								// Valor inicial de 0
+	sei();										// Habilitar interrupciones globales
+}
+/****************************************/
+// Interrupt routines
+ISR(PCINT0_vect)
+{
+	// Si PB0 se presiona, incrementar
+	if (!(PINB & (1 << PB1))) {
+		contador++;
+	}
+	// Si PB1 se presiona, decrementar
+	if (!(PINB & (1 << PB0))) {
+		contador--;
+	}
+	PORTD = contador; // Actualizar LEDs con el nuevo valor del contador
+}

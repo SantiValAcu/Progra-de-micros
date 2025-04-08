@@ -1,0 +1,136 @@
+/*
+ * Postlab4.c
+ *
+ * Created: 6/4/2025
+ * Author: Santiago Valdez Acuña
+ * Description: Contador binario de 8 bits. Utilizando 2 pushbuttons para aumentar y decrementar contador.
+  Configuración del ADC2 para leer el valor de un potenciometro, y desplegar el valor del ADC en formato 
+  hexadecimal en dos displays de 7 segmentos. Y una alarma que se enciende cuando el valor del ADC es mayor 
+  al del valor binario.
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+// Nombres variables
+uint8_t contador = 0;
+uint8_t adc_val = 0x00;
+uint8_t display_sel = 0;
+uint8_t led_sel = 0; // alternancia entre displays y LEDs
+uint8_t tabla[] = {0xF7, 0x31, 0xDB, 0x7B, 0x3D, 0x7E, 0xFE, 0x33, 0xFF, 0x7F, 0xBF, 0xFC, 0xD6, 0xF9, 0xDE, 0x9E};
+
+/****************************************/
+// Function prototypes
+void setup();
+void init_ADC();
+void update_display(uint8_t value);
+void update_leds(uint8_t value);
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();				// configurar MCU
+	while (1)
+	{
+		// Comparar valor del ADC y contador
+		if (adc_val > contador)
+		PORTC |= (1 << PC3);	// Encender LED de alarma
+		else
+		PORTC &= ~(1 << PC3);	// Apagar LED de alarma
+	}
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup()
+{
+	cli();										// Desactivar interrupciones globales
+	// Configurar PORTD como salida
+	DDRD    = 0xFF;
+	PORTD   = 0x00;								// Inicializar LEDs en 0
+	// Configurar PC0 y PC1 como salida (para transistores)
+	DDRC |= (1 << PC0) | (1 << PC1);
+	PORTC &= ~((1 << PC0) | (1 << PC1));		// Apagar transistores al inicio
+	// Configurar PC3 como salida (Led alarma)
+	DDRC |= (1 << PC3);
+	PORTC &= ~(1 << PC3);						// Led apagado
+	// Configurar PB0 y PB1 como entrada
+	DDRB &= ~(1 << PB0) & ~(1 << PB1);
+	PORTB |= (1 << PB0) | (1 << PB1);
+	// Configurar PB2 como salida
+	DDRB |= (1 << PB2);							// PB2 como salida para transistor LEDs
+	PORTB &= ~(1 << PB2);						// LEDs apagados al inicio
+	// Configurar interrupciones pinchange
+	PCICR |= (1 << PCIE0);						// Habilitar interrupciones para portB
+	PCMSK0 |= (1 << PCINT0) | (1 << PCINT1);	// Habilitar interrupción en PB0 y PB1
+	// Configurar Timer0 para multiplexado de displays 
+	TCCR0A = 0x00;                     // Modo normal
+	TCCR0B |= (1 << CS01);            // Prescaler de 8 
+	TIMSK0 |= (1 << TOIE0);           // Habilitar interrupción por desbordamiento del Timer0
+	// Configurar ADC en canal 2 (PC2)
+	init_ADC();
+	ADCSRA |= (1 << ADSC);						// Iniciar la primera conversión
+	sei();										// Habilitar interrupciones globales
+}
+
+// Configurar ADC en canal 2
+void init_ADC() {
+	ADMUX = 0;
+	ADMUX = (1 << REFS0) | (1 << ADLAR) | (1 << MUX1);					// AVCC, left adjust, ADC2
+	ADCSRA = 0;
+	ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS1) | (1 << ADPS0);	// Habilitar ADC con prescaler 8
+}
+/****************************************/
+// Interrupt routines
+
+// Interrupción del ADC (actualiza el valor leído)
+ISR(ADC_vect) {
+	adc_val = ADCH;			// Leer parte alta del ADC (8 bits)
+	ADCSRA |= (1 << ADSC);  // Iniciar nueva conversión
+}
+// Interrupción del Timer0 (Multiplexado de displays)
+ISR(TIMER0_OVF_vect) {
+	PORTB &= ~(1 << PB2);  // apagar transistor LED
+	PORTC &= ~((1 << PC0) | (1 << PC1)); // apagar displays
+	if (led_sel == 0) {
+		// Mostrar valor del ADC en displays
+		update_display(adc_val);
+		} else {
+		// Mostrar valor del contador en LEDs
+		update_leds(contador);
+	}
+	led_sel = !led_sel;
+}
+// Multiplexado de los displays de 7 segmentos
+void update_display(uint8_t value) {
+	uint8_t unidades = value & 0x0F;  // Último dígito en hex
+	uint8_t decenas = (value >> 4) & 0x0F;  // Primer dígito en hex
+	if (display_sel == 0) {
+		PORTD = tabla[unidades];
+		PORTC |= (1 << PC0);   // Encender unidades
+		} else {
+		PORTD = tabla[decenas];
+		PORTC |= (1 << PC1);   // Encender decenas
+	}
+	display_sel = !display_sel;  // Alternar entre displays
+}
+// Función para LEDs
+void update_leds(uint8_t value) {
+	PORTB |= (1 << PB2);  // encender transistor LEDs
+	PORTD = value;
+}
+// Interrupción de pinchange (PB0 y PB1)
+ISR(PCINT0_vect)
+{
+	// Delay simple para antirrebote
+	for (volatile uint32_t i = 0; i < 500; i++);
+
+	// Si PB1 se presiona, incrementar
+	if (!(PINB & (1 << PB1))) {
+		contador++;
+	}
+	// Si PB0 se presiona, decrementar
+	if (!(PINB & (1 << PB0))) {
+		contador--;
+	}
+	PORTD = contador; // Actualizar LEDs con el nuevo valor del contador
+}

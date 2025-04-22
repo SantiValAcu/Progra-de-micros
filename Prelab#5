@@ -1,0 +1,75 @@
+/*
+ * Prelab5.c
+ *
+ * Created: 8/4/2025
+ * Author: Santiago Valdez Acuña
+ * Description: Mover servo con PWM
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include "PWM/pwm.h"
+
+/****************************************/
+// Function prototypes
+void setup(void);
+void adc_init(void);
+uint16_t adc_read(uint8_t channel);
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup(); // configurar MCU
+	while (1)
+	{
+		// Iniciar conversión ADC en el canal 0
+		adc_read(0);
+	}
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup(void)
+{
+	cli(); // Desactivar interrupciones
+	
+	// Configurar ADC
+	adc_init();
+
+	// Configurar PWM
+	pwm_init();
+
+	sei(); // Activar interrupciones
+}
+
+// Inicializar ADC
+void adc_init(void)
+{
+	ADMUX = (1 << REFS0);  // AVcc, resultado a la derecha
+	ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // Habilitar ADC, Habilitar interrupción, Prescaler 128
+}
+
+// Leer un canal ADC específico (0-7)
+uint16_t adc_read(uint8_t channel)
+{
+	ADMUX = (ADMUX & 0xF0) | (channel & 0x0F); // Seleccionar canal
+	ADCSRA |= (1 << ADSC);  // Iniciar conversión
+	return 0; // La conversión se maneja en la ISR
+}
+/****************************************/
+// Interrupt routines
+ISR(ADC_vect)
+{
+	// Leer el valor de ADC (10 bits)
+	uint16_t adc_value = ADC;
+
+	// Mapear de 0–1023 a 1000–2000 us
+	uint16_t duty = ((uint32_t)adc_value * 4000UL) / 1023UL + 1000UL;
+
+	// Establecer ciclo de trabajo PWM
+	pwm_set_duty(duty);
+
+	// Iniciar la próxima conversión
+	ADCSRA |= (1 << ADSC);
+}

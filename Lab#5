@@ -1,0 +1,184 @@
+/*
+ * Lab5.c
+ *
+ * Created: 9/4/2025 16:14:50
+ * Author: Santiago Valdez Acuña
+ * Description: Código que genera dos diferentes señales de PWM con ayuda de dos potenciometros.
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include "PWM/pwm.h"
+#include "PWM2/pwm2.h"
+/****************************************/
+// Function prototypes
+void setup(void);
+void adc_init(void);
+volatile uint8_t current_adc_channel = 0;
+volatile uint16_t adc_results[2] = {0, 0};
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();
+	while (1)
+	{
+
+	}
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup(void)
+{
+	cli(); // Desactivar interrupciones
+	
+	// Configurar ADC
+	adc_init();
+
+	// Configurar PWM para ambos servos
+    pwm_init();   // Inicializa PWM en OC1A (PB1)
+    pwm2_init();  // Inicializa PWM2 en OC1B (PB2)
+
+    // Iniciar primera conversión
+    ADMUX = (1 << REFS0) | (current_adc_channel & 0x07);
+    ADCSRA |= (1 << ADSC);
+		
+	sei(); // Activar interrupciones
+}
+
+// Inicializar ADC
+void adc_init(void)
+{
+	ADMUX = (1 << REFS0);  // AVcc, resultado a la derecha
+	ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // Habilitar ADC, Habilitar interrupción, Prescaler 128
+	ADCSRB = 0;  // Free running mode
+}
+
+/****************************************/
+// Interrupt routines
+ISR(ADC_vect)
+{
+	// Guardar resultado del canal actual
+	adc_results[current_adc_channel] = ADC;
+	
+	// Cambiar al siguiente canal
+	current_adc_channel = (current_adc_channel + 1) % 2;
+	ADMUX = (1 << REFS0) | (current_adc_channel & 0x07);
+	
+	// Actualizar servos con los últimos valores conocidos
+	uint16_t duty1 = ((uint32_t)adc_results[0] * 4000UL) / 1023UL + 1000UL;
+	uint16_t duty2 = ((uint32_t)adc_results[1] * 4000UL) / 1023UL + 1000UL;
+	
+	pwm_set_duty(duty1);
+	pwm2_set_duty(duty2);
+	
+	// Iniciar nueva conversión
+	ADCSRA |= (1 << ADSC);
+}
+------------------------------------------------------------------------------------
+/*
+ * PWM.h
+ *
+ * Created: 9/4/2025
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM_H_
+#define PWM_H_
+
+#include <stdint.h>
+
+void pwm_init(void);
+void pwm_set_duty(uint16_t duty);
+
+#endif /* PWM_H_ */
+-------------------------------------------------------------------------------------
+/*
+ * PWM2.h
+ *
+ * Created: 9/4/2025 
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM2_H_
+#define PWM2_H_
+
+#include <stdint.h>
+
+void pwm2_init(void);
+void pwm2_set_duty(uint16_t duty);
+
+#endif /* PWM2_H_ */
+--------------------------------------------------------------------------------------
+/*
+ * PWM.c
+ *
+ * Created: 9/4/2025
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include "pwm.h"
+
+#define SERVO_MIN 1000
+#define SERVO_MAX 5000
+#define PWM_PERIOD 40000
+
+void pwm_init(void)
+{
+	// Pin OC1A (PB1) como salida
+	DDRB |= (1 << DDB1);
+
+	// Fast PWM, TOP = ICR1
+	TCCR1A = (1 << COM1A1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler 8
+	ICR1 = PWM_PERIOD; // 20ms periodo (50Hz)
+
+	// Pulso inicial
+	OCR1A = SERVO_MIN;  // Posición inicial del servo
+}
+
+void pwm_set_duty(uint16_t duty)
+{
+	// Asegurarse de que el valor de duty esté dentro del rango del servo
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+
+	// Ajustar el ciclo de trabajo del PWM
+	OCR1A = duty;
+}
+----------------------------------------------------------------------------------
+/*
+ * PWM2.c
+ *
+ * Created: 9/4/2025 16:22:55
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include "pwm2.h"
+
+#define SERVO_MIN 1000
+#define SERVO_MAX 5000
+#define PWM_PERIOD 40000
+
+void pwm2_init(void)
+{
+	// Pin OC2A (PB2) como salida
+	DDRB |= (1 << DDB2);
+	
+	// Configurar Timer1 para OC1B (no tocamos configuraciones compartidas)
+	TCCR1A |= (1 << COM1B1);
+	
+	OCR1B = SERVO_MIN;
+}
+
+void pwm2_set_duty(uint16_t duty)
+{
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+	OCR1B = duty;
+}

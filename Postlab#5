@@ -1,0 +1,261 @@
+/*
+ * Postlab5.c
+ *
+ * Created: 21/4/2025 
+ * Author: Santiago Valdez Acuña
+ * Description: Lectura de tres canales analógicos ADC, dos realizan el movimiento de servos y el último la intensidad de un led.
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include "PWM/pwm.h"
+#include "PWM2/pwm2.h"
+#include "PWM3/pwm3.h"
+/****************************************/
+// Function prototypes
+void setup(void);
+void adc_init(void);
+volatile uint8_t current_adc_channel = 0;
+volatile uint16_t adc_results[3] = {0, 0, 0}; // 3 para los canales de los potenciometros
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();
+	while (1)
+	{
+		// Todo se maneja por interrupciones
+	}
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup(void)
+{
+	cli(); // Desactivar interrupciones
+	
+	// Configurar ADC
+	adc_init();
+
+	// Configurar PWM
+    pwm_init();    // Servo 1 (PB1)
+    pwm2_init();   // Servo 2 (PB2)
+    pwm3_init();   // LED PWM manual (PB0)
+
+    // Iniciar primera conversión
+    ADMUX = (1 << REFS0) | (current_adc_channel & 0x07);
+    ADCSRA |= (1 << ADSC);
+		
+	sei(); // Activar interrupciones
+}
+
+// Inicializar ADC
+void adc_init(void)
+{
+	ADMUX = (1 << REFS0);  // AVcc, resultado a la derecha
+	ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // Habilitar ADC, Habilitar interrupción, Prescaler 128
+	ADCSRB = 0;  // Free running mode
+	DIDR0 = 0x07; // Deshabilitar entradas digitales en ADC0-ADC2
+}
+
+/****************************************/
+// Interrupt routines
+ISR(ADC_vect)
+{
+	// Guardar resultado del canal actual
+	adc_results[current_adc_channel] = ADC;
+	
+	// Cambiar al siguiente canal
+	current_adc_channel = (current_adc_channel + 1) % 3;
+	ADMUX = (1 << REFS0) | (current_adc_channel & 0x07);
+	
+	// Actualizar servos 
+	uint16_t duty1 = ((uint32_t)adc_results[0] * 4000UL) / 1023UL + 1000UL;
+	uint16_t duty2 = ((uint32_t)adc_results[1] * 4000UL) / 1023UL + 1000UL;
+	
+	pwm_set_duty(duty1);
+	pwm2_set_duty(duty2);
+	
+	// Actualizar PWM manual para LED (usando ADC2)
+	pwm3_set_duty(adc_results[2]);
+	
+	// Iniciar nueva conversión
+	ADCSRA |= (1 << ADSC);
+}
+---------------------------------------------------------------------------------------
+/*
+ * PWM.h
+ *
+ * Created: 21/4/2025
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM_H_
+#define PWM_H_
+
+#include <stdint.h>
+
+void pwm_init(void);
+void pwm_set_duty(uint16_t duty);
+
+#endif /* PWM_H_ */
+-----------------------------------------------------------------------------------------
+/*
+ * PWM2.h
+ *
+ * Created: 21/4/2025 
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM2_H_
+#define PWM2_H_
+
+#include <stdint.h>
+
+void pwm2_init(void);
+void pwm2_set_duty(uint16_t duty);
+
+#endif /* PWM2_H_ */
+---------------------------------------------------------------------------------------
+/*
+ * PWM3.h
+ *
+ * Created: 21/4/2025 
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM3_H_
+#define PWM3_H_
+
+#include <stdint.h>
+
+void pwm3_init(void);
+void pwm3_set_duty(uint16_t duty);
+
+#endif /* PWM3_H_ */
+----------------------------------------------------------------------------------------
+/*
+ * PWM.c
+ *
+ * Created: 21/4/2025
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include "pwm.h"
+
+#define SERVO_MIN 1000
+#define SERVO_MAX 5000
+#define PWM_PERIOD 40000
+
+void pwm_init(void)
+{
+	// Pin OC1A (PB1) como salida
+	DDRB |= (1 << DDB1);
+
+	// Fast PWM, TOP = ICR1
+	TCCR1A = (1 << COM1A1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler 8
+	ICR1 = PWM_PERIOD; // 20ms periodo (50Hz)
+
+	// Pulso inicial
+	OCR1A = SERVO_MIN;  // Posición inicial del servo
+}
+
+void pwm_set_duty(uint16_t duty)
+{
+	// Asegurarse de que el valor de duty esté dentro del rango del servo
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+
+	// Ajustar el ciclo de trabajo del PWM
+	OCR1A = duty;
+}
+-----------------------------------------------------------------------------------
+/*
+ * PWM2.c
+ *
+ * Created: 21/4/2025 
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include "pwm2.h"
+
+#define SERVO_MIN 1000
+#define SERVO_MAX 5000
+#define PWM_PERIOD 40000
+
+void pwm2_init(void)
+{
+	// Pin OC2A (PB2) como salida
+	DDRB |= (1 << DDB2);
+	
+	// Configurar Timer1 para OC1B (no tocamos configuraciones compartidas)
+	TCCR1A |= (1 << COM1B1);
+	
+	OCR1B = SERVO_MIN;
+}
+
+void pwm2_set_duty(uint16_t duty)
+{
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+	OCR1B = duty;
+}
+---------------------------------------------------------------------------------------
+/*
+ * PWM3.c
+ *
+ * Created: 21/4/2025 
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include "pwm3.h"
+
+volatile uint8_t pwm3_counter = 0;
+volatile uint8_t pwm3_duty = 0;
+
+void pwm3_init(void)
+{
+	// Configurar PB0 como salida
+	DDRB |= (1 << PB0);
+	
+	// Configurar Timer0 para PWM de alta frecuencia
+	TCCR0A = (1 << WGM01); // Modo CTC
+	TCCR0B = (1 << CS00);   // Sin prescaler
+	OCR0A = 199;            // Frecuencia a 80kHz
+	TIMSK0 = (1 << OCIE0A); // Habilitar interrupción
+	
+	// Valor inicial
+	PORTB |= (1 << PB0);
+}
+
+void pwm3_set_duty(uint16_t duty)
+{
+	// Convertir 10 bits (0-1023) a 8 bits (0-255)
+	pwm3_duty = duty >> 2;
+}
+
+// Rutina de servicio de interrupción por comparación del Timer0
+ISR(TIMER0_COMPA_vect)
+{
+	static uint8_t phase = 0;
+	
+	 // Incrementamos el contador de fase en cada interrupción
+	phase++;			// Esto genera una "rampa" que va de 0 a 255 y luego se reinicia
+	
+	// Comparamos el valor actual de phase con el ciclo de trabajo deseado (pwm3_duty)
+	if(phase >= pwm3_duty) {
+		// Si hemos superado el valor de duty cycle, apagamos el LED
+		PORTB &= ~(1 << PB0);
+		} else {
+		// Mientras estemos dentro del duty cycle, mantenemos el LED encendido
+		PORTB |= (1 << PB0);
+	}
+}

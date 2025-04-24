@@ -22,7 +22,7 @@ void writeString(char* texto);
 int main(void)
 {
 	setup();			// Configuración MCU
-	writeString("Puto el que lo lea");
+	writeString("Escribir texto");
 	while (1)
 	{
 	}

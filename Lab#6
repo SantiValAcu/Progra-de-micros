@@ -1,0 +1,76 @@
+/*
+* Lab6.c
+*
+* Created: 23/4/2025 
+* Author : Santiago Valdez Acuña
+ * Description: Envio de cadena de caracteres.
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+/****************************************/
+// Function prototypes
+void setup();
+void initUART();
+void writeChar(char caracter);
+void writeString(char* texto);
+
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();			// Configuración MCU
+	writeString("Puto el que lo lea");
+	while (1)
+	{
+	}
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup()
+{
+    cli(); // Desactivar interrupciones
+	
+	// Configurar Puerto B como salida
+	DDRB = 0xFF;    // Todos los pines del Puerto B como salidas
+	PORTB = 0x00;   // Inicializa todos los pines apagados
+	
+	initUART();     // Configura UART
+	
+    sei(); // Activar interrupciones
+}
+
+void initUART(){
+	// Configurar pines TX (salida) y RX (entrada)
+	DDRD |= (1 << DDD1);   // PD1 = TX
+	DDRD &= ~(1 << DDD0);  // PD0 = RX
+	// Configuración base
+	UCSR0A = 0;  
+	// Habilitar interrupción de recepción, transmisión y recepción UART
+	UCSR0B = (1 << RXCIE0) | (1 << RXEN0) | (1 << TXEN0);
+	// Modo asincrónico, 8 bits de datos, 1 stop bit
+	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+	// Configurar baud rate: 9600 baudios con reloj de 16MHz
+	UBRR0 = 103;
+}
+
+void writeChar(char caracter)
+{
+	while (!(UCSR0A & (1 << UDRE0))); // Espera a que el buffer esté listo
+	UDR0 = caracter;                  // Envía el carácter
+}
+
+void writeString(char* texto){
+	for (uint8_t i = 0; *(texto+i) != '\0'; i++){
+		writeChar(*(texto+i));
+	}
+}
+/****************************************/
+// Interrupt routines
+// Interrupción al recibir datos por UART
+ISR(USART_RX_vect){
+	char temporal = UDR0;      // Lee el dato recibido
+	writeChar(temporal);       // Hace eco del dato 
+}

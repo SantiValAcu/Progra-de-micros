@@ -1,0 +1,176 @@
+/*
+* Postlab6.c
+*
+* Created: 24/4/2025 10:26:39
+* Author : Santiago Valdez Acuña
+ * Description: Control de LEDs mediante UART y lectura de potenciómetro. Despliega menu para elegir la opcióm.
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+/****************************************/
+// Function prototypes
+void setup(void);
+uint16_t readADC(void);
+void displayMenu(void);
+void initUART(void);
+void initADC(void);
+void writeChar(char caracter);
+void writeString(char* texto);
+
+volatile char receivedChar = 0;
+volatile uint8_t expectingAscii = 0;
+
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();            // Configuración MCU
+	displayMenu();      // Mostrar menú inicial
+	
+	while (1)
+	{
+		// Todo el procesamiento se hace en la interrupción
+	}
+}
+
+
+/****************************************/
+// NON-Interrupt subroutines
+void setup()
+{
+	cli(); // Desactivar interrupciones
+	
+	// Configurar Puerto B como salida (PB0-PB1 para LEDs)
+	DDRB |= (1 << DDB0) | (1 << DDB1);
+	PORTB &= ~((1 << PORTB0) | (1 << PORTB1));
+	
+	// Configurar Puerto D como salida (PD2-PD7 para LEDs)
+	DDRD |= 0xFC;   // PD2-PD7 como salidas
+	PORTD &= 0x03;  // PD2-PD7 apagados
+	
+	initUART();     // Configura UART
+	initADC();      // Configura ADC
+	
+	sei(); // Activar interrupciones
+}
+
+void initUART()
+{
+	// Configurar pines TX (salida) y RX (entrada)
+	DDRD |= (1 << DDD1);   // PD1 = TX
+	DDRD &= ~(1 << DDD0);  // PD0 = RX
+	// Configuración base
+	UCSR0A = 0;
+	// Habilitar interrupción de recepción, transmisión y recepción UART
+	UCSR0B = (1 << RXCIE0) | (1 << RXEN0) | (1 << TXEN0);
+	// Modo asincrónico, 8 bits de datos, 1 stop bit
+	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+	// Configurar baud rate: 9600 baudios con reloj de 16MHz
+	UBRR0 = 103;
+}
+
+void initADC()
+{
+	// Referencia AVcc, ajuste a la derecha
+	ADMUX = (1 << REFS0);
+	// Habilitar ADC, prescaler de 128 (16MHz/128 = 125kHz)
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+uint16_t readADC()
+{
+	ADCSRA |= (1 << ADSC); // Iniciar conversión
+	while (ADCSRA & (1 << ADSC)); // Esperar fin de conversión
+	return ADC;
+}
+
+void writeChar(char caracter)
+{
+	while (!(UCSR0A & (1 << UDRE0))); // Espera a que el buffer esté listo
+	UDR0 = caracter;                  // Envía el carácter
+}
+
+void writeString(char* texto)
+{
+	for (uint8_t i = 0; *(texto+i) != '\0'; i++)
+	{
+		writeChar(*(texto+i));
+	}
+}
+
+void displayMenu()
+{
+	writeString("\n*************************\n");
+	writeString("Menu:\r\n");
+	writeString("1. Leer Potenciometro\n");
+	writeString("2. Enviar Ascii\n");
+	writeString("*************************\n");
+	writeString("Seleccione una opción: ");
+}
+
+/****************************************/
+// Interrupt routines
+// Interrupción al recibir datos por UART
+ISR(USART_RX_vect)
+{
+	char c = UDR0;      // Lee el dato recibido
+	// Si eligio la opción "2" va a entrar a este apartado
+	if (expectingAscii) 
+	{
+		// Mostrar carácter en LEDs
+		PORTD = (PORTD & 0x03) | ((c & 0x3F) << 2);
+		PORTB = (PORTB & 0xFC) | ((c >> 6) & 0x03);
+		
+		writeString("\nCaracter ingresado: ");
+		writeChar(c);			// Mostrar el caracter ingresado
+		writeString("\n\n");
+		expectingAscii = 0;		// Apagar mascara de leds
+		displayMenu();			// Mostrar nuevamente el menu
+	}
+	else {
+		writeChar(c); // Eco del caracter
+		// Ver que opción puso
+		switch(c) 
+		{
+			// Si eligio la opción "1"
+			case '1':
+			writeString("\nValor del potenciometro: ");
+			// Convertir valor ADC a cadena manualmente
+			uint16_t adcValue = readADC();
+			char buffer[4];
+			uint8_t i = 0;
+			// Lógica para mostrar valor del potenciometro
+			if (adcValue == 0) 
+			{
+				writeChar('0');
+				} 
+				else {
+				while (adcValue > 0) 
+				{
+					buffer[i++] = (adcValue % 10) + '0';
+					adcValue /= 10;
+				}
+				while (i > 0) 
+				{
+					writeChar(buffer[--i]);
+				}
+			}
+			writeString("\n\n");
+			displayMenu();		// Mostrar nuevamente el menu
+			break;				// Regresar
+			// Si eligio la opción "2"
+			case '2':
+			expectingAscii = 1;			// Encender mascara de leds
+			writeString("\nIngrese un caracter ASCII: ");
+			break;				// Regresar
+			// Si puso otro caracter que no sea "1" o "2", saldra ERROR
+			default:
+			writeString("\nError: Opción no valida\n\n");
+			displayMenu();		// Mostrar nuevamente el menu
+			break;				// Regresar
+		}
+	}
+}

@@ -1,0 +1,596 @@
+/*
+ * Proyecto_2.c
+ *
+ * Created: 5/5/2025
+ * Author: Santiago Valdez Acuña
+ * Description: Tanque con 4 servos que funciona con potenciometros y tiene 3 modos (MANUAL, EEPROM Y UART)
+ */ 
+/****************************************/
+// Encabezado (Libraries)
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/eeprom.h>
+#include "ORUGA/PWM.h"
+#include "Servo_180/PWM2.h"
+#include "EEPROM/eeprom.h"
+#include "UART/uart.h"
+/****************************************/
+// ENUMS Y VARIABLES
+// Lista para los modos
+typedef enum { MODO_MANUAL, MODO_EEPROM, MODO_UART} ModoOperacion;
+volatile ModoOperacion modo_actual = MODO_MANUAL;	// Empezar con el modo 1
+volatile uint8_t current_adc_channel = 0;			// Iniciar con el primer ADC
+volatile uint16_t adc_results[4] = {0, 0, 0, 0};	// Para 4 potenciómetros
+// Para guardar posiciones (solo cabeza y cañón)
+volatile uint8_t posicion_cabeza = 0;
+volatile uint8_t posicion_canon = 0;
+// Índice de reproducción EEPROM
+volatile uint8_t eeprom_indice_reproduccion = 0;
+/****************************************/
+// Function prototypes
+void setup(void);
+void adc_init(void);
+void actualizar_leds(void);
+void guardar_posicion_servos(void);
+void reproducir_siguiente_posicion_servos(void);
+/****************************************/
+// Main Function
+int main(void)
+{
+	setup();
+	while (1)
+	{
+		switch (modo_actual)
+		{
+			case MODO_MANUAL:		// PWM controlado automáticamente por ISR(ADC_vect)
+			break;
+			case MODO_EEPROM:		// Se maneja por interrupciones
+			break;
+			case MODO_UART:
+			break;
+		}
+	}
+}
+/****************************************/
+// NON-Interrupt subroutines
+void setup(void)
+{
+	cli(); // Desactivar interrupciones
+	
+	// Configurar ADC
+	adc_init();
+	// Configurar UART
+	initUART();
+	
+	// Configurar PWM para los servos
+    pwm_init();		// Configura Timer1 e inicializa PWM1 en OC1A (PB1) y PWM2 en OC1B (PB2)
+	pwm2_init();	// Configura Timer0 e inicializa PWM3 en OC0A (PD6) y PWM4 en OC0B (PD5)
+
+    // Iniciar primera conversión
+    ADMUX = (1 << REFS0) | (current_adc_channel & 0x07);
+    ADCSRA |= (1 << ADSC);
+	
+	// Configurar PB3 y PB4 como salida
+	DDRB |= (1 << PB3) | (1 << PB4);
+	// Modo 1 encendido
+	PORTB &= ~(1 << PB4);	// LED izquierdo apagado
+	PORTB |= (1 << PB3);   // LED derecha encendido
+	
+	
+	// Configurar PD2 y PD3 como entrada
+	DDRD &= ~((1 << PD2) | (1 << PD3));
+	PORTD |= (1 << PD2) | (1 << PD3);
+	
+	// Configurar interrupciones pinchange
+	PCICR |= (1 << PCIE2);						// Habilitar interrupciones para portB
+	PCMSK2 |= (1 << PCINT18) | (1 << PCINT19);	// Habilitar interrupción en PD2 y PD3
+	
+	sei(); // Activar interrupciones
+}
+
+// Inicializar ADC
+void adc_init(void)
+{
+	// AVcc, resultado a la derecha
+	ADMUX = (1 << REFS0);
+	// Habilitar ADC, Habilitar interrupción, Prescaler 128
+	ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+	// Free running mode
+	ADCSRB = 0;
+}
+
+// Rutina de actualización de leds
+void actualizar_leds(void)
+{
+	switch (modo_actual)
+	{
+		case MODO_MANUAL:
+		PORTB |= (1 << PB3);   // LED derecha encendido
+		PORTB &= ~(1 << PB4);  // LED izquierda apagados
+		break;
+		case MODO_EEPROM:
+		PORTB &= ~(1 << PB3);  // LED derecha apagados
+		PORTB |= (1 << PB4);   // LED izquierda encendido
+		break;
+		case MODO_UART:
+		PORTB |= (1 << PB3) | (1 << PB4); // Ambos encendidos
+		break;
+	}
+}
+
+// Rutina para guardar posiciones
+void guardar_posicion_servos(void)
+{
+	posicion_cabeza = (adc_results[2] * 30) / 1023 + 5;
+	posicion_canon = (adc_results[3] * 5) / 1023 + 6;
+	eeprom_guardar_posicion(posicion_cabeza, posicion_canon);
+}
+
+void reproducir_siguiente_posicion_servos(void)
+{
+	uint8_t cabeza, canon;
+	if (eeprom_leer_posicion_indice(eeprom_indice_reproduccion, &cabeza, &canon))
+	{
+		pwm3_set_position(cabeza);
+		pwm4_set_position(canon);
+		eeprom_indice_reproduccion = (eeprom_indice_reproduccion + 1) % 4;
+	}
+}
+/****************************************/
+// Interrupt routines
+ISR(ADC_vect)
+{
+	// Guardar resultado del canal actual
+	adc_results[current_adc_channel] = ADC;
+	// Cambiar al siguiente canal
+	current_adc_channel = (current_adc_channel + 1) % 4;	//4 canales
+	ADMUX = (1 << REFS0) | (current_adc_channel & 0x07);
+	
+	 if (modo_actual == MODO_MANUAL)
+	 {
+		// Control de los 4 servos
+		// Servos de oruga (giro continuo)
+		uint16_t duty1 = ((uint32_t)adc_results[0] * 4000UL) / 1023UL + 1000UL; // Oruga derecha
+		uint16_t duty2 = ((uint32_t)adc_results[1] * 4000UL) / 1023UL + 1000UL;	// Oruga izquierda
+		pwm1_set_duty(duty1);
+		pwm2_set_duty(duty2);
+		// Servos cabeza y cañon
+		uint8_t duty3 = (adc_results[2] * 30) / 1023 + 5;		// Movimiento 180° de cabeza
+		uint8_t duty4 = (adc_results[3] * 5) / 1023 + 6;		// Movimiento aprox30° de cañon
+		pwm3_set_position(duty3);
+		pwm4_set_position(duty4);
+	 }
+	 
+	// Iniciar nueva conversión
+	ADCSRA |= (1 << ADSC);
+}
+
+// Interrupción de pin change (PD2 y PD3)
+ISR(PCINT2_vect)
+{
+	// Antirrebote simple
+	for (volatile uint32_t i = 0; i < 500; i++);
+
+	// Si PD2 se presiona cambiar modo
+	if (!(PIND & (1 << PD2))) 
+	{
+		modo_actual = (modo_actual + 1) % 3;
+		actualizar_leds();
+	}
+
+	// Si PD3 se presiona hacer acción por modo
+	if (!(PIND & (1 << PD3))) {
+		if (modo_actual == MODO_MANUAL)
+			guardar_posicion_servos();
+		else if (modo_actual == MODO_EEPROM)
+			reproducir_siguiente_posicion_servos();
+	}
+}
+
+// Interrupción de modo UART
+ISR(USART_RX_vect)
+{
+	char comando = UDR0;
+	if (modo_actual == MODO_UART)
+	{
+		static char buffer[5];
+		static uint8_t index = 0;
+		if ((comando >= 'A' && comando <= 'D') || (comando >= '0' && comando <= '9')) 
+		{
+			buffer[index++] = comando;
+			if (index == 4 || comando == '\n') 
+			{
+				buffer[index] = '\0';
+				index = 0;
+				int valor = parse_int(&buffer[1]);
+				switch (buffer[0]) 
+				{
+					case 'A': pwm1_set_duty((valor*4000UL)/1023UL+1000UL); break;
+					case 'B': pwm2_set_duty((valor*4000UL)/1023UL+1000UL); break;
+					case 'C': pwm3_set_position((valor* 30) / 1023 + 5); break;
+					case 'D': pwm4_set_position((valor* 5) / 1023 + 6); break;
+				}
+			}
+		}
+	}
+}
+
+/*
+ * PWM.h
+ *
+ * Created: 13/5/2025 08:48:23
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM_H_
+#define PWM_H_
+
+#include <stdint.h>
+
+void pwm_init(void);
+void pwm1_set_duty(uint16_t duty);		//Movimiento de servo1 de giro completo (360)
+void pwm2_set_duty(uint16_t duty);		//Movimiento de servo2 de giro completo (360)
+
+#endif /* PWM_H_ */
+/*
+ * PWM.c
+ *
+ * Created: 13/5/2025 08:48:09
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include "pwm.h"
+
+// Valores para los servos
+#define SERVO_MIN 1000
+#define SERVO_MAX 5000
+#define PWM_PERIOD 40000
+
+void pwm_init(void)
+{
+	// Pin OC1A (PB1) como salida
+	DDRB |= (1 << DDB1);
+	// Pin OC1B (PB2) como salida
+	DDRB |= (1 << DDB2);
+	
+	// Confiuración Timer1
+	// Fast PWM, TOP = ICR1
+	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11);
+	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler 8
+	ICR1 = PWM_PERIOD; // 20ms periodo (50Hz)
+
+	// Pulso inicial
+	OCR1A = SERVO_MIN;  // Posición inicial del servo
+	// Pulso inicial
+	OCR1B = SERVO_MIN;	// Posición inicial del servo
+}
+
+void pwm1_set_duty(uint16_t duty)
+{
+	// Asegurarse de que el valor de duty esté dentro del rango del servo
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+
+	// Ajustar el ciclo de trabajo del PWM
+	OCR1A = duty;
+}
+
+void pwm2_set_duty(uint16_t duty)
+{
+	// Asegurarse de que el valor de duty esté dentro del rango del servo
+	if (duty < SERVO_MIN) duty = SERVO_MIN;
+	if (duty > SERVO_MAX) duty = SERVO_MAX;
+	
+	// Ajustar el ciclo de trabajo del PWM
+	OCR1B = duty;
+}
+
+/*
+ * PWM2.h
+ *
+ * Created: 13/5/2025 08:49:04
+ *  Author: santi
+ */ 
+
+
+#ifndef PWM2_H_
+#define PWM2_H_
+
+#include <stdint.h>
+
+void pwm2_init(void);
+void pwm3_set_position(uint8_t duty);		// Movimiento de servo3, 0° a 180°
+void pwm4_set_position(uint8_t duty);		// Movimiento de servo4, 0° a 30°
+
+#endif /* PWM2_H_ */
+/*
+ * PWM2.c
+ *
+ * Created: 13/5/2025 08:48:57
+ *  Author: santi
+ */ 
+
+#include <avr/io.h>
+#include "pwm2.h"
+
+void pwm2_init(void)
+{
+	// Pin OC0A (PD6) como salida
+	DDRD |= (1 << DDD6);
+	// Pin OC0B (PD5) como salida
+	DDRD |= (1 << DDD5);
+
+	// Confiuración Timer0
+	// Fast PWM, TOP = 0xFF
+	TCCR0A |= (1 << COM0A1)	| (1 << COM0B1) | (1 << WGM01) | (1 << WGM00);
+	TCCR0B |= (1 << CS02) | (1 << CS00); // Prescaler 1024
+	
+	// Pulso inicial
+	OCR0A = 23;  // Posición inicial del servo
+	// Pulso inicial
+	OCR0B = 23;	// Posición inicial del servo
+}
+
+void pwm3_set_position(uint8_t duty)
+{
+	OCR0A = duty;		// Movimiento de 180° para la cabeza
+}
+
+void pwm4_set_position(uint8_t duty)
+{
+	OCR0B = duty;		// Movimiento de 30° para el cañon
+}
+
+/*
+ * eeprom.h
+ *
+ * Created: 10/5/2025 
+ *  Author: santi
+ */ 
+
+
+#ifndef EEPROM_H_
+#define EEPROM_H_
+
+#include <avr/eeprom.h>
+
+void eeprom_guardar_posicion(uint8_t cabeza, uint8_t canon);
+void eeprom_leer_ultima_posicion(uint8_t* cabeza, uint8_t* canon);
+uint8_t eeprom_leer_posicion_indice(uint8_t indice, uint8_t* cabeza, uint8_t* canon);
+
+#endif /* EEPROM_H_ */
+/*
+ * eeprom.c
+ *
+ * Created: 10/5/2025
+ *  Author: santi
+ */ 
+
+#include "eeprom.h"
+
+#define EEPROM_BASE_ADDR 0			// Dirección base de EEPROM, dirección "0" 
+#define EEPROM_MAX_POSICIONES 4		// Cantidad máxima de posiciones que se pueden guardar
+#define EEPROM_POS_SIZE 2			// Tamaño de cada posición, 2bytes por cabeza y cañon
+#define EEPROM_PTR_ADDR (EEPROM_BASE_ADDR + (EEPROM_MAX_POSICIONES * EEPROM_POS_SIZE))		// Dirección en donde se guarda el puntero
+
+// Rutina para guardar valores de posiciones en EEPROM, con estructura circular para sobreescribir la más antigua
+void eeprom_guardar_posicion(uint8_t cabeza, uint8_t canon) 
+{
+	uint8_t ptr = eeprom_read_byte((uint8_t*)(uintptr_t)EEPROM_PTR_ADDR);	// Lee el indice actual
+	if (ptr >= EEPROM_MAX_POSICIONES) ptr = 0;								// Si es mayor o igual a 4 convertir el valor en 0
+
+	uint16_t addr = EEPROM_BASE_ADDR + (ptr * EEPROM_POS_SIZE);				// Calcular la dirección en donde guardará
+	// Guardar los valores en EEPROM
+	eeprom_update_byte((uint8_t*)(uintptr_t)(addr), cabeza);
+	eeprom_update_byte((uint8_t*)(uintptr_t)(addr + 1), canon);
+	// Actualizar el indice de escritura
+	ptr = (ptr + 1) % EEPROM_MAX_POSICIONES;
+	eeprom_update_byte((uint8_t*)(uintptr_t)EEPROM_PTR_ADDR, ptr);
+}
+
+// Rutina para leer la ultima posición guardada
+void eeprom_leer_ultima_posicion(uint8_t* cabeza, uint8_t* canon) 
+{
+	uint8_t ptr = eeprom_read_byte((uint8_t*)(uintptr_t)EEPROM_PTR_ADDR);	// Lee el indice de la proxima posición
+	if (ptr == 0) ptr = EEPROM_MAX_POSICIONES;								// Si es 0, la última posición está al final
+	ptr--;																	// Retroceder al último valor guardado
+
+	uint16_t addr = EEPROM_BASE_ADDR + (ptr * EEPROM_POS_SIZE);				//Calcular dirección de la posición
+	// Leer los valores de los servos desde la EEPROM
+	*cabeza = eeprom_read_byte((uint8_t*)(uintptr_t)(addr));
+	*canon = eeprom_read_byte((uint8_t*)(uintptr_t)(addr + 1));
+}
+
+// Rutina para leer la posición específica dentro del historial
+uint8_t eeprom_leer_posicion_indice(uint8_t indice, uint8_t* cabeza, uint8_t* canon) {
+	if (indice >= EEPROM_MAX_POSICIONES)									// Si es mayor o igual a 4 es inválido
+	return 0;  // Índice inválido
+	// Lee el indice actual de escritura
+	uint8_t ptr = eeprom_read_byte((uint8_t*)(uintptr_t)EEPROM_PTR_ADDR);
+	if (ptr > EEPROM_MAX_POSICIONES) ptr = 0;								// Si es mayo a cuatro se produce un "error" y se reinica a 0
+
+	// Calcula el índice real
+	uint8_t real_idx = (ptr + indice) % EEPROM_MAX_POSICIONES;
+	uint16_t addr = EEPROM_BASE_ADDR + (real_idx * EEPROM_POS_SIZE);
+	// Leer los valores de los servos desde la EEPROM
+	*cabeza = eeprom_read_byte((uint8_t*)(uintptr_t)(addr));
+	*canon = eeprom_read_byte((uint8_t*)(uintptr_t)(addr + 1));
+	return 1;
+}
+
+/*
+ * uart.h
+ *
+ * Created: 10/5/2025 
+ *  Author: santi
+ */ 
+
+
+#ifndef UART_H_
+#define UART_H_
+
+#include <avr/io.h>
+
+void initUART(void);
+void writeChar(char caracter);
+void writeString(char* texto);
+int parse_int(const char *str);
+
+#endif /* UART_H_ */
+/*
+ * uart.c
+ *
+ * Created: 10/5/2025 
+ *  Author: santi
+ */ 
+
+#include "uart.h"
+
+// Inicializar UART
+void initUART(void)
+{
+	// Configurar pines TX (salida) y RX (entrada)
+	DDRD |= (1 << DDD1);   // PD1 = TX
+	DDRD &= ~(1 << DDD0);  // PD0 = RX
+	// Configuración base
+	UCSR0A = 0;
+	// Habilitar interrupción de recepción, transmisión y recepción UART
+	UCSR0B = (1 << RXCIE0) | (1 << RXEN0) | (1 << TXEN0);
+	// Modo asincrónico, 8 bits de datos, 1 stop bit
+	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+	// Configurar baud rate: 9600 baudios con reloj de 16MHz
+	UBRR0 = 103;
+}
+
+void writeChar(char caracter)
+{
+	while (!(UCSR0A & (1 << UDRE0))); // Espera a que el buffer esté listo
+	UDR0 = caracter;                  // Envía el carácter
+}
+
+void writeString(char* texto){
+	for (uint8_t i = 0; *(texto+i) != '\0'; i++){
+		writeChar(*(texto+i));
+	}
+}
+
+// -----
+int parse_int(const char *str)
+{
+	int result = 0;
+	while (*str >= '0' && *str <= '9') {
+		result = result * 10 + (*str - '0');
+		str++;
+	}
+	return result;
+}
+-----------------------------------------------------------------------------------------------------------------------------
+# Import standard python modules.
+import sys
+import time
+import serial
+
+# This example uses the MQTTClient instead of the REST client
+from Adafruit_IO import MQTTClient
+from Adafruit_IO import Client, Feed
+
+# holds the count for the feed
+run_count = 0
+
+# Set to your Adafruit IO username and key.
+# Remember, your key is a secret,
+# so make sure not to publish it when you publish this code!
+ADAFRUIT_IO_USERNAME = ""
+ADAFRUIT_IO_KEY = ""
+
+# Set to the ID of the feed to subscribe to for updates.
+FEED_ID_receive1 = 'Oruga1_TX'
+FEED_ID_Send1 = 'Oruga1_RX'
+
+FEED_ID_receive2 = 'Oruga2_TX'
+FEED_ID_Send2 = 'Oruga2_RX'
+
+FEED_ID_receive3 = 'Cabeza_TX'
+FEED_ID_Send3 = 'Cabeza_RX'
+
+FEED_ID_receive4 = 'Canon_TX'
+FEED_ID_Send4 = 'Canon_RX'
+
+
+
+# Define "callback" functions which will be called when certain events 
+# happen (connected, disconnected, message arrived).
+def connected(client):
+    """Connected function will be called when the client is connected to
+    Adafruit IO.This is a good place to subscribe to feed changes. The client
+    parameter passed to this function is the Adafruit IO MQTT client so you
+    can make calls against it easily.
+    """
+    # Subscribe to changes on a feed named Counter.
+    print('Subscribing to Feed ...')
+    client.subscribe(FEED_ID_receive1)
+    client.subscribe(FEED_ID_receive2)
+    client.subscribe(FEED_ID_receive3)
+    client.subscribe(FEED_ID_receive4)
+    print('Waiting for feed data...')
+
+def disconnected(client):
+    """Disconnected function will be called when the client disconnects."""
+    sys.exit(1)
+
+def message(client, feed_id, payload):
+    """Message function will be called when a subscribed feed has a new value.
+    The feed_id parameter identifies the feed, and the payload parameter has
+    the new value.
+    """
+    print('Feed {0} received new value: {1}'.format(feed_id, payload))
+    # Publish or "send" message to corresponding feed
+    if feed_id == FEED_ID_receive1:
+        LETRA = 'A'
+        client.publish(FEED_ID_Send1, payload)
+    elif feed_id == FEED_ID_receive2:
+        LETRA = 'B'
+        client.publish(FEED_ID_Send2, payload)
+    elif feed_id == FEED_ID_receive3:
+        LETRA = 'C'
+        client.publish(FEED_ID_Send3, payload)
+    elif feed_id == FEED_ID_receive4:
+        LETRA = 'D'
+        client.publish(FEED_ID_Send4, payload)
+    else:
+        print("Feed desconocido")
+        return
+    
+    comando = f"{LETRA}{payload}\n"
+    print(f"Enviando comando al Arduino: {comando.strip()}")
+    miarduino.write(comando.encode())
+
+# Create an MQTT client instance.
+client = MQTTClient(ADAFRUIT_IO_USERNAME, ADAFRUIT_IO_KEY)
+miarduino = serial.Serial(port='COM3', baudrate=9600, timeout=0.1)
+
+# Setup the callback functions defined above.
+client.on_connect = connected
+client.on_disconnect = disconnected
+client.on_message = message
+
+# Connect to the Adafruit IO server.
+client.connect()
+
+# The first option is to run a thread in the background so you can continue
+# doing things in your program.
+client.loop_background()
+
+while True:
+    """ 
+    # Uncomment the next 3 lines if you want to constantly send data
+    # Adafruit IO is rate-limited for publishing
+    # so we'll need a delay for calls to aio.send_data()
+    run_count += 1
+    print('sending count: ', run_count)
+    client.publish(FEED_ID_Send, run_count)
+    """
+    print('Running "main loop" ')
+    time.sleep(3)
